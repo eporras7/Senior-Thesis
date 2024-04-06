@@ -1,0 +1,2586 @@
+---
+title: "Thesis Work Output by Section"
+output: github_document
+date: "2023-10-31"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(readr)
+library(stringr)
+library(ggpubr)
+library(vtable)
+library(janitor)
+library(stargazer)
+library(plm)
+library(scales)
+```
+
+## Data and Methods
+
+Here are my initial thoughts on data feasibility, summary statistics, and methodological approaches.
+
+## Player Performance Data
+
+For player performance data, I've used a dataset off of Kaggle, which contains player and match data in the MLS from 1996 to 2020: https://www.kaggle.com/datasets/josephvm/major-league-soccer-dataset/discussion. 
+
+The creator of this repository was also kind to create a kernel displaying the ways in which the data could be used. This can be found here: https://www.kaggle.com/code/josephvm/mls-data-examples/notebook. 
+
+```{r, echo = FALSE}
+tables <- read.csv("all_tables.csv")
+```
+
+The dataset 'tables' contains MLS standings from 1996 to 2020. For the most part, the data is tidy that allows me to filter or join datasets with relative ease. The one inconvenience about the dataset on standings is that the naming conventions of teams in the "Team" column is inconsistent between years. For example, the Tampa Bay Mutiny appear as "Tampa Bay Mutiny (X)" in the year 1996, while in 2002, the same "x" for a team appears as "x - Columbus Crew." Here, "x" represents a team making the postseason. I will probably have to refactor this column and allow postseason qualification to be another column. 
+
+The dataset 'events' represents event data for MLS matches during the 2022-23 season. While interesting, I will probably use this data for this project due to only having one year's worth of data. 
+
+The dataset 'matches' contains MLS match data from 1996 to 2020. This has a little more information that could potentially be interesting, but it's likely not relevant enough to my research question to be used. 
+
+```{r, echo = FALSE}
+# import sheet
+goalkeepers <- read.csv("all_goalkeepers.csv")
+
+# summary statistics reported to console
+goalkeepers %>%
+  sapply(summary)
+
+# filtering and cleaning set for analysis
+goalkeepers <- goalkeepers %>%
+  # filter for years between 2004-2017
+  filter(Year > 2003 & Year < 2018) %>%
+  # separate player name into first and last name for easier joining later
+  separate(col = "Player", c("first_name", "last_name"), sep = " ") %>%
+  # trim whitespaces from club names 
+  mutate_if(is.character, str_trim) %>%
+  # filtering out teams for balanced panel
+  filter(Club == "CHI" | 
+         Club == "COL" | 
+         Club == "CLB" | 
+         Club == "DAL" | 
+         Club == "DC" | 
+         Club == "KC" | 
+         Club == "LA" |
+         Club == "MET" |
+         Club == "NE" |
+         Club == "NYR" |
+         Club == "RBNY" |
+         Club == "SKC") %>%
+  # recode Clubs to account for name changes
+  mutate(Club = case_match(Club,
+                    "CHI" ~ "CHI", 
+                    "COL" ~ "COL",
+                    "CLB" ~ "CLB",
+                    "DAL" ~ "DAL",
+                    "DC" ~ "DC",
+                    "KC" ~ "KC",
+                    "LA" ~ "LA",
+                    "MET" ~ "NYR",
+                    "NE" ~ "NE",
+                    "NYR" ~ "NYR",
+                    "RBNY" ~ "NYR",
+                    "SKC" ~ "KC"))
+
+# overall summary table for paper for goalkeeper stats  
+st(goalkeepers)
+
+# pre-DP summary table for goalkeeper performance
+goalkeepers %>%
+  filter(Year < 2007) %>%
+  st()
+
+# post-DP summary table for goalkeeper performance
+goalkeepers %>%
+  filter(Year > 2006) %>%
+  st()
+```
+
+
+```{r, echo = FALSE}
+# import sheet
+players <- read.csv("all_players.csv")
+
+# report summary statistics on console
+players %>%
+  sapply(summary)
+
+# filtering and cleaning set for analysis
+players <- players %>%
+  # filter for years 2004-2017
+  filter(Year > 2003 & Year < 2018) %>%
+  # separate player name into first and last name for easier joining later
+  separate(col = "Player", c("first_name", "last_name"), sep = " ") %>%
+  # trim whitespaces from club names 
+  mutate_if(is.character, str_trim) %>%
+  # filtering out teams for balanced panel
+  filter(Club == "CHI" | 
+         Club == "COL" | 
+         Club == "CLB" | 
+         Club == "DAL" | 
+         Club == "DC" | 
+         Club == "KC" | 
+         Club == "LA" |
+         Club == "MET" |
+         Club == "NE" |
+         Club == "NYR" |
+         Club == "RBNY" |
+         Club == "SKC") %>%
+  # recode Clubs to account for name changes
+  mutate(Club = case_match(Club,
+                    "CHI" ~ "CHI", 
+                    "COL" ~ "COL",
+                    "CLB" ~ "CLB",
+                    "DAL" ~ "DAL",
+                    "DC" ~ "DC",
+                    "KC" ~ "KC",
+                    "LA" ~ "LA",
+                    "MET" ~ "NYR",
+                    "NE" ~ "NE",
+                    "NYR" ~ "NYR",
+                    "RBNY" ~ "NYR",
+                    "SKC" ~ "KC"))
+  
+# overall summary table for paper for outfield player stats  
+st(players)
+
+# pre-DP summary table for outfield player performance
+players %>%
+  filter(Year < 2007) %>%
+  st()
+
+# post-DP summary table for outfield player performance
+players %>%
+  filter(Year > 2006) %>%
+  st()
+```
+
+
+Similarly, here are the summary statistics for outfield players in the MLS from 1996 to 2020. This dataset is tidy with very little missing values. Like the goalie dataset, the PKG.A variable (penalty kick goals/attempts) is classed as a string and not as a numeric variable. The metric is still useful, but I will have to split the string into two numeric variables (penalty kick goals, penalty kick attempts) and mutate a new variable for a conversion rate.
+
+## Other Potential Sources For MLS Player Performance
+
+Potential Source: https://fbref.com/en/comps/22/Major-League-Soccer-Stats 
+Article on xG: https://statsbomb.com/soccer-metrics/expected-goals-xg-explained/
+
+```{r, echo = FALSE}
+# get regular season performance for teams in panel
+standings <- tables %>%
+  # filter for 2004=2017 seasons
+  filter(Year < 2018 & Year > 2003) %>%
+  # removes Conference indicators and compares Overall performance in regular season
+  filter(Conference == "Overall") %>%
+  # splits Team and Pts into separate categories for later analysis
+  separate(col = "Team", c("Team", "Qualificiation Status"), sep = "\\(|\\)") %>%
+  separate(col = "Pts", c("Pts", "Conference Indicator"), sep = "\\[|\\]") %>%
+  # remove whitespaces
+  mutate_if(is.character, str_trim) %>%
+  # recode for team abbrevatiations
+  mutate(Team = case_match(Team,
+                    "Columbus Crew" ~ "CLB", 
+                    "Kansas City Wizards" ~ "KCW", 
+                    "Los Angeles Galaxy" ~ "LA", 
+                    "D.C. United" ~ "DC", 
+                    "Colorado Rapids" ~ "COL", 
+                    "MetroStars" ~ "MET", 
+                    "San Jose Earthquakes" ~ "SJ", 
+                    "Dallas Burn" ~ "DAL", 
+                    "New England Revolution" ~ "NE",
+                    "Chicago Fire" ~ "CHI", 
+                    "FC Dallas" ~ "DAL", 
+                    "Real Salt Lake" ~ "RSL", 
+                    "Chivas USA" ~ "CHV", 
+                    "Houston Dynamo" ~ "HOU",
+                    "New York Red Bulls" ~ "NYR",
+                    "Toronto FC 1" ~ "TOR",
+                    "Toronto FC" ~ "TOR",
+                    "Seattle Sounders FC" ~ "SEA", 
+                    "LA Galaxy" ~ "LA", 
+                    "Philadelphia Union" ~ "PHI",
+                    "Sporting Kansas City" ~ "KC",
+                    "Portland Timbers" ~ "POR",
+                    "Vancouver Whitecaps FC" ~ "VAN",
+                    "Montreal Impact" ~ "MTL", 
+                    "Orlando City SC" ~ "ORL",
+                    "New York City FC" ~ "NYCFC",
+                    "Columbus Crew SC" ~ "CLB",
+                    "Minnesota United FC" ~ "MNUFC", 
+                    "Atlanta United FC" ~ "ATL"
+                    )) %>%
+  # convert Pts to numeric
+  mutate_at(c(11), as.numeric) %>%
+  # keep teams that only lasted in 2004-17 for balanced panel
+  filter(Team == "CLB" | 
+         Team == "KCW" | 
+         Team == "LA" | 
+         Team == "DC" |
+         Team == "COL" |
+         Team == "MET" |
+         Team == "DAL" | 
+         Team == "CHI" |
+         Team == "NYR" |
+         Team == "KC" |
+         Team == "NE") %>%
+  # recode Teams to account for name changes
+  mutate(Team = case_match(Team,
+                    "CHI" ~ "CHI", 
+                    "COL" ~ "COL",
+                    "CLB" ~ "CLB",
+                    "DAL" ~ "DAL",
+                    "DC" ~ "DC",
+                    "KC" ~ "KC",
+                    "LA" ~ "LA",
+                    "MET" ~ "NYR",
+                    "NE" ~ "NE",
+                    "NYR" ~ "NYR",
+                    "KCW" ~ "KC")) %>%
+  # get points per game
+  mutate(ppg = Pts / GP)
+```
+
+## MLS Salary Data
+
+MLS Salary Link: https://mlsplayers.org/resources/salary-guide 
+Kaggle dataset: https://www.kaggle.com/code/rizal1015/mls-salary-players
+
+```{r, echo = FALSE}
+# import sheet
+salary2004 <- read.csv("MLS Salaries 2004 copy.csv")
+
+# summary statistics in console
+salary2004 %>%
+  summarise(Mean = mean(Base.Salary, na.rm = T), 
+            sd = sd(Base.Salary, na.rm = T))
+
+# cleaning up the data
+salary2004 <- salary2004 %>%
+    # rename column names to match other sheets
+  rename(last_name = Last, 
+         first_name = First,
+         club = Team, 
+         base_salary = Base.Salary, 
+         guaranteed_compensation = Guaranteed.Compensation) %>%
+  # create new variables of interest
+  mutate(year = 2004,
+         DP = 0,
+         # hardcoding position for these players since dataset didn't come with positions
+         position = case_when(
+           last_name == "Adu" & first_name == "Freddy" ~ "F",
+           last_name == "Marshall" & first_name == "Chad" ~ "D",
+           last_name == "Cochrane" & first_name == "Ryan" ~ "D",
+           last_name == "Dempsey" & first_name == "Clint" ~ "M",
+           last_name == "Armas" & first_name == "Chris" ~ "M",
+           last_name == "Razov" & first_name == "Ante" ~ "F",
+           last_name == "Razov" & first_name == "DaMarcus" ~ "D",
+           last_name == "Brown" & first_name == "CJ" ~ "D",
+           last_name == "Marsch" & first_name == "Jesse" ~ "M",
+           last_name == "Whitfield" & first_name == "Evan" ~ "D",
+           last_name == "Curtin" & first_name == "Jim" ~ "D",
+           last_name == "Perez" & first_name == "Orlando" ~ "D",
+           last_name == "Gray" & first_name == "Kelly" ~ "D-M",
+           last_name == "Mapp" & first_name == "Justin" ~ "M",
+           last_name == "Jaqua" & first_name == "Nate" ~ "F",
+           last_name == "Pause" & first_name == "Logan" ~ "M",
+           last_name == "Capano" & first_name == "Craig" ~ "M",
+           last_name == "Selolwane" & first_name == "Dipsy" ~ "F",
+           last_name == "Ralph" & first_name == "Damani" ~ "F",
+           last_name == "Spencer" & first_name == "John" ~ "F",
+           last_name == "Powell" & first_name == "Darryl" ~ "M",
+           last_name == "Mastroeni" & first_name == "Pablo" ~ "M",
+           last_name == "Chung" & first_name == "Mark" ~ "M",
+           last_name == "Henderson" & first_name == "Chris" ~ "M",
+           last_name == "Roberts" & first_name == "Zizi" ~ "F",
+           last_name == "Kotschau" & first_name == "Richard" ~ "D",
+           last_name == "Carrieri" & first_name == "Chris" ~ "F",
+           last_name == "Beckerman" & first_name == "Kyle" ~ "M",
+           last_name == "Trembly" & first_name == "Seth" ~ "M-D",
+           last_name == "Stewart" & first_name == "Jeff" ~ "D",
+           last_name == "Kingsley" & first_name == "Zach" ~ "M",
+           last_name == "Schmidt" & first_name == "Casey" ~ "F",
+           last_name == "Crawford" & first_name == "Matt" ~ "M",
+           last_name == "Borchers" & first_name == "Nat" ~ "D",
+           last_name == "Beckerman" & first_name == "Kyle" ~ "M",
+           last_name == "McBride" & first_name == "Brian" ~ "F",
+           last_name == "Cunningham" & first_name == "Jeff" ~ "F",
+           last_name == "Hejduk" & first_name == "Frankie" ~ "D",
+           last_name == "Maissonueve" & first_name == "Brian" ~ "M",
+           last_name == "Paule" & first_name == "Ross" ~ "M",
+           last_name == "Clark" & first_name == "Mike" ~ "D",
+           last_name == "Buddle" & first_name == "Edson" ~ "F",
+           last_name == "Garcia" & first_name == "Freddy" ~ "M",
+           last_name == "Martino" & first_name == "Kyle" ~ "M",
+           last_name == "McCarty" & first_name == "Chad" ~ "M",
+           last_name == "Walsh" & first_name == "Diego" ~ "M",
+           last_name == "Oughton" & first_name == "Duncan" ~ "D",
+           last_name == "Akwari" & first_name == "Nelson" ~ "D",
+           last_name == "Johnson" & first_name == "Edson" ~ "F",
+           last_name == "O'Brien" & first_name == "Ronnie" ~ "M",
+           last_name == "Rhine" & first_name == "Bobby" ~ "M",
+           last_name == "Davis" & first_name == "Brad" ~ "M",
+           last_name == "Gbandi" & first_name == "Chris" ~ "D",
+           last_name == "Vaca" & first_name == "Joselito" ~ "M",
+           last_name == "Thomas" & first_name == "Shavar" ~ "D",
+           last_name == "Thompson" & first_name == "Jason" ~ "F",
+           last_name == "Curtis" & first_name == "Ali" ~ "D-F",
+           last_name == "Stone" & first_name == "Jordan" ~ "M",
+           last_name == "Glinton" & first_name == "Gavin" ~ "F",
+           last_name == "Behncke" & first_name == "Matt" ~ "D",
+           last_name == "Stewart" & first_name == "Earnie" ~ "M",
+           last_name == "Kovalenko" & first_name == "Dema" ~ "M",
+           last_name == "Petke" & first_name == "Mike" ~ "D",
+           last_name == "Cerritos" & first_name == "Ronald" ~ "F",
+           last_name == "Olsen" & first_name == "Ben" ~ "M",
+           last_name == "Convey" & first_name == "Bobby" ~ "M",
+           last_name == "Reyes" & first_name == "Milton" ~ "D-M",
+           last_name == "Quaranta" & first_name == "Santino" ~ "M-F",
+           last_name == "Nelsen" & first_name == "Ryan" ~ "D",
+           last_name == "Barclay" & first_name == "Devin" ~ "F",
+           last_name == "Eskandarian" & first_name == "Alecko" ~ "F",
+           last_name == "Prideaux" & first_name == "Brandon" ~ "D",
+           last_name == "Quintanilla" & first_name == "Eliseo" ~ "F-M",
+           last_name == "Carroll" & first_name == "Brian" ~ "M",
+           last_name == "Martins" & first_name == "Thiago" ~ "F",
+           last_name == "Stokes" & first_name == "David" ~ "D",
+           last_name == "Alegria" & first_name == "Jose" ~ "M",
+           last_name == "Namoff" & first_name == "Bryan" ~ "D",
+           last_name == "Wolff" & first_name == "Josh" ~ "F",
+           last_name == "Radosavljevic" & first_name == "Predrag" ~ "M",
+           last_name == "Klein" & first_name == "Chris" ~ "M",
+           last_name == "Gutierrez" & first_name == "Diego" ~ "D",
+           last_name == "Harris" & first_name == "Wolde" ~ "F",
+           last_name == "Garcia" & first_name == "Nick" ~ "D",
+           last_name == "Zavagnin" & first_name == "Kerry" ~ "M",
+           last_name == "Conrad" & first_name == "Jimmy" ~ "D",
+           last_name == "Gomez" & first_name == "Francisco" ~ "M",
+           last_name == "Zotinca" & first_name == "Alex" ~ "D",
+           last_name == "Armstrong" & first_name == "Stephen" ~ "M",
+           last_name == "Burciaga" & first_name == "Jose" ~ "D",
+           last_name == "Arnaud" & first_name == "Davy" ~ "M",
+           last_name == "Hong" & first_name == "Myung Bo" ~ "D",
+           last_name == "Elliott" & first_name == "Simon" ~ "M",
+           last_name == "Califf" & first_name == "Danny" ~ "D",
+           last_name == "Gonzalez" & first_name == "Guillermo" ~ "M",
+           last_name == "Marshall" & first_name == "Tyrone" ~ "D",
+           last_name == "Broome" & first_name == "Paul" ~ "M",
+           last_name == "Victorine" & first_name == "Sasha" ~ "M",
+           last_name == "Vagenas" & first_name == "Peter" ~ "M",
+           last_name == "Ruiz" & first_name == "Carlos" ~ "F",
+           last_name == "Lewis" & first_name == "Ricky" ~ "D",
+           last_name == "Suarez" & first_name == "Ryan" ~ "D",
+           last_name == "Moreno" & first_name == "Alejandro" ~ "F",
+           last_name == "Torres" & first_name == "Arturo" ~ "F",
+           last_name == "Pope" & first_name == "Eddie" ~ "D",
+           last_name == "Guevara" & first_name == "Amado" ~ "M",
+           last_name == "Zotinca" & first_name == "Alex" ~ "D",
+           last_name == "Gaven" & first_name == "Eddie" ~ "M",
+           last_name == "Lisi" & first_name == "Mark" ~ "M",
+           last_name == "Clark" & first_name == "Ricardo" ~ "M",
+           last_name == "Bartolomeu" & first_name == "Edgar" ~ "D",
+           last_name == "DiGiamarino" & first_name == "Joey" ~ "M",
+           last_name == "Wolyniec" & first_name == "John" ~ "F",
+           last_name == "Ziadie" & first_name == "Craig" ~ "D",
+           last_name == "Leitch" & first_name == "Chris" ~ "D",
+           last_name == "Magee" & first_name == "Mike" ~ "M",
+           last_name == "LeBlanc" & first_name == "Jacob" ~ "M",
+           last_name == "Addo" & first_name == "Joe" ~ "D",
+           last_name == "Regan" & first_name == "Tim" ~ "D",
+           last_name == "Moore" & first_name == "Joe-Max" ~ "F",
+           last_name == "Ralston" & first_name == "Steve" ~ "M",
+           last_name == "Cancela" & first_name == "Jose" ~ "M",
+           last_name == "Twellman" & first_name == "Taylor" ~ "F",
+           last_name == "Llamosa" & first_name == "Carlos" ~ "D",
+           last_name == "Franchino" & first_name == "Joe" ~ "M",
+           last_name == "Noonan" & first_name == "Pat" ~ "F",
+           last_name == "Pierce" & first_name == "Rusty" ~ "D",
+           last_name == "Kante" & first_name == "Daouda" ~ "D",
+           last_name == "Moore" & first_name == "Jason" ~ "M",
+           last_name == "Joseph" & first_name == "Shalrie" ~ "M",
+           last_name == "Zotinca" & first_name == "Alex" ~ "D",
+           last_name == "Leonard" & first_name == "Marshall" ~ "M",
+           last_name == "Donovan" & first_name == "Landon" ~ "M-F",
+           last_name == "Mulrooney" & first_name == "Richard" ~ "M",
+           last_name == "Dayak" & first_name == "Troy" ~ "D",
+           last_name == "Onstad" & first_name == "Patrick" ~ "D",
+           last_name == "DeRosario" & first_name == "Dwayne" ~ "F",
+           last_name == "Corrales" & first_name == "Ramiro" ~ "M",
+           last_name == "Russell" & first_name == "Ian" ~ "D",
+           last_name == "Dunivant" & first_name == "Todd" ~ "D",
+           last_name == "Faria" & first_name == "Rodrigo" ~ "F",
+           last_name == "Robinson" & first_name == "Eddie" ~ "D",
+           last_name == "Alvarez" & first_name == "Arturo" ~ "M",
+           last_name == "Mullen" & first_name == "Brian" ~ "M",
+           last_name == "Waibel" & first_name == "Craig" ~ "D",
+           last_name == "Levesque" & first_name == "Roger" ~ "M",
+           last_name == "Ching" & first_name == "Brian" ~ "F",
+           last_name == "Roner" & first_name == "Chris" ~ "M",
+           last_name == "Walker" & first_name == "Jamil" ~ "M-F",
+           TRUE ~ "GK")) %>%
+  # recode team abbreviations
+  mutate(club = case_match(club,
+                    "CBS" ~ "CLB",
+                    "CHI" ~ "CHI", 
+                    "COL" ~ "COL",
+                    "DAL" ~ "DAL",
+                    "DC" ~ "DC",
+                    "KCW" ~ "KC",
+                    "LA" ~ "LA",
+                    "MET" ~ "NYR",
+                    "NE" ~ "NE",
+                    "SJ" ~ "SJ",
+                    )) %>%
+  # filtering out teams for balanced panel
+  filter(club == "CHI" | 
+         club == "COL" | 
+         club == "CLB" | 
+         club == "DAL" | 
+         club == "DC" | 
+         club == "KC" | 
+         club == "LA" |
+         club == "NE" |
+         club == "NYR") %>%
+  # drop missing values
+  drop_na()
+```
+
+For missing positions in the salary_2004 dataset, I need to make a note in the paper that missing positions were first referenced in the salary_2006 dataset, and if still not there, I looked at FBRef to input missing position data (https://fbref.com/en/). 
+
+```{r, echo = FALSE}
+# import sheet
+salary2005 <-read.csv("MLS Salaries 2005 copy.csv")
+
+# summary statistics on console
+salary2005 %>%
+  summarise(Mean = mean(Base.Salary, na.rm = T), 
+            sd = sd(Base.Salary, na.rm = T))
+
+# cleaning data
+salary2005 <- salary2005 %>%
+  # rename column names
+  rename(last_name = Last.Name, 
+         first_name = First.Name,
+         club = Team, 
+         base_salary = Base.Salary, 
+         guaranteed_compensation = Guaranteed.Compensation) %>%
+  # filtering out teams for balanced panel
+  filter(club == "CHI" | 
+         club == "COL" | 
+         club == "CBS" | 
+         club == "DAL" | 
+         club == "DC" | 
+         club == "KCW" | 
+         club == "LA" |
+         club == "NE" |
+         club == "MET") %>%
+  # recode team abbreviations for teams in panel
+  mutate(club = case_match(club,
+                    "CBS" ~ "CLB",
+                    "CHI" ~ "CHI", 
+                    "COL" ~ "COL",
+                    "DAL" ~ "DAL",
+                    "DC" ~ "DC",
+                    "KCW" ~ "KC",
+                    "LA" ~ "LA",
+                    "MET" ~ "NYR",
+                    "NE" ~ "NE",
+                    "SJ" ~ "SJ",
+                    )) %>%
+  # create new variables for analysis for pre-DP and post-DP periods
+  mutate(year = 2005,
+         DP = 0, 
+         position = case_when(
+           last_name == "Sanneh" & first_name == "Tony" ~ "D",
+           last_name == "Armas" & first_name == "Christ" ~ "M",
+           last_name == "Reiter" & first_name == "Lubos" ~ "F",
+           last_name == "Caballero" & first_name == "Samuel" ~ "D",
+           last_name == "Guerrero" & first_name == "Ivan" ~ "M",
+           last_name == "Herron" & first_name == "Andy" ~ "F",
+           last_name == "Marsch" & first_name == "Jesse" ~ "M",
+           last_name == "Curtin" & first_name == "Jim" ~ "D",
+           last_name == "Marsch" & first_name == "Jesse" ~ "M",
+           last_name == "Brown" & first_name == "CJ" ~ "D",
+           last_name == "Thorrington" & first_name == "John" ~ "M",
+           last_name == "Gray" & first_name == "Kell" ~ "D-M",
+           last_name == "Jaqua" & first_name == "Nate" ~ "F",
+           last_name == "Pause" & first_name == "Logan" ~ "M",
+           last_name == "Barrett" & first_name == "Chad" ~ "F",
+           last_name == "John" & first_name == "William" ~ "M-F",
+           last_name == "Stewart" & first_name == "Jack" ~ "D",
+           last_name == "Capano" & first_name == "Craig" ~ "M",
+           last_name == "Correa" & first_name == "Thiago" ~ "M",
+           last_name == "Buete" & first_name == "Scott" ~ "M",
+           last_name == "Griffin" & first_name == "Leonard" ~ "D",
+           last_name == "Rolfe" & first_name == "Chris" ~ "F",
+           last_name == "Montz" & first_name == "Jared" ~ "D",
+           last_name == "Segares" & first_name == "Gonzalo" ~ "D",
+           last_name == "Mastroeni" & first_name == "Pablo" ~ "M",
+           last_name == "Cunningham" & first_name == "Jeff" ~ "F",
+           last_name == "Petke" & first_name == "Mike" ~ "D",
+           last_name == "Kotschau" & first_name == "Ritchie" ~ "D",
+           last_name == "Beckemna" & first_name == "Kyle" ~ "M",
+           last_name == "Peguero" & first_name == "Jean Philippe" ~ "F",
+           last_name == "Borchers" & first_name == "Nate" ~ "D",
+           last_name == "Cullen" & first_name == "Leo" ~ "M",
+           last_name == "Nkong" & first_name == "Alain" ~ "M",
+           last_name == "Denton" & first_name == "Eric" ~ "D",
+           last_name == "Lewis" & first_name == "Ricky" ~ "D",
+           last_name == "Freeman" & first_name == "Hunter" ~ "D",
+           last_name == "Gonzalez" & first_name == "Luchi" ~ "F",
+           last_name == "Harris" & first_name == "Wolde" ~ "F",
+           last_name == "Crawford" & first_name == "Matt" ~ "M",
+           last_name == "Melamed" & first_name == "Guy" ~ "M-D",
+           last_name == "Gargan" & first_name == "Daniel" ~ "D",
+           last_name == "Lowery" & first_name == "Amir" ~ "M",
+           last_name == "Elbaum" & first_name == "Josh" ~ "M",
+           last_name == "Gostmanov" & first_name == "Sasha" ~ "F",
+           last_name == "Sagastume" & first_name == "Marcus" ~ "M",
+           last_name == "Sepuya" & first_name == "Eugene" ~ "F",
+           last_name == "Elliott" & first_name == "Simon" ~ "M",
+           last_name == "Fraser" & first_name == "Robin" ~ "D",
+           last_name == "Buddle" & first_name == "Edson" ~ "F",
+           last_name == "Marshall" & first_name == "Chad" ~ "D",
+           last_name == "Wolyniec" & first_name == "John" ~ "F",
+           last_name == "Martino" & first_name == "Kyle" ~ "M",
+           last_name == "Oughton" & first_name == "Duncan" ~ "D",
+           last_name == "Paule" & first_name == "Ross" ~ "M",
+           last_name == "Glen" & first_name == "Cornell" ~ "F",
+           last_name == "Wingert" & first_name == "Chris" ~ "D",
+           last_name == "Szetala" & first_name == "Danny" ~ "M",
+           last_name == "Herdsman" & first_name == "Stephen" ~ "D",
+           last_name == "Barclay" & first_name == "Devin" ~ "F",
+           last_name == "Rodriguez" & first_name == "Mario" ~ "M",
+           last_name == "Schulte" & first_name == "Mark" ~ "D",
+           last_name == "Gallardo" & first_name == "Luis" ~ "M",
+           last_name == "Storey" & first_name == "Marcus" ~ "M-F",
+           last_name == "Cameron" & first_name == "Knox" ~ "F",
+           last_name == "Kelly" & first_name == "Ryan" ~ "D",
+           last_name == "Mediate" & first_name == "Domenic" ~ "M",
+           last_name == "Vasquez" & first_name == "Eric" ~ "M",
+           last_name == "Johnson" & first_name == "Eddie" ~ "F",
+           last_name == "Vanney" & first_name == "Greg" ~ "D",
+           last_name == "Valakari" & first_name == "Simon" ~ "M",
+           last_name == "Mulrooney" & first_name == "Richard" ~ "M",
+           last_name == "O'Brien" & first_name == "Ronnie" ~ "M",
+           last_name == "Jolley" & first_name == "Steve" ~ "D",
+           last_name == "Nunez" & first_name == "Ramon" ~ "M",
+           last_name == "Ruiz" & first_name == "Carlos" ~ "F",
+           last_name == "Talley" & first_name == "Carey" ~ "D",
+           last_name == "Pareja" & first_name == "Oscar" ~ "M",
+           last_name == "Rhine" & first_name == "Bobby" ~ "M",
+           last_name == "Gbandi" & first_name == "Chris" ~ "D",
+           last_name == "Alvarez" & first_name == "Arturo" ~ "M",
+           last_name == "Moor" & first_name == "Drew" ~ "D",
+           last_name == "Goodson" & first_name == "Clarence" ~ "D",
+           last_name == "Maurin" & first_name == "Ty" ~ "M",
+           last_name == "Salyer" & first_name == "Phil" ~ "D",
+           last_name == "Wagenfuhr" & first_name == "David" ~ "D",
+           last_name == "Yi" & first_name == "Alex" ~ "D",
+           last_name == "Pitchkoian" & first_name == "Aaron" ~ "D",
+           last_name == "Thompson" & first_name == "Abe" ~ "F",
+           last_name == "Torres" & first_name == "Mario" ~ "M",
+           last_name == "Woods" & first_name == "Alex" ~ "M-F",
+           last_name == "Adu" & first_name == "Freddy" ~ "F",
+           last_name == "Olsen" & first_name == "Ben" ~ "M",
+           last_name == "Gomez" & first_name == "Cristian" ~ "M",
+           last_name == "Moreno" & first_name == "Jaime" ~ "F",
+           last_name == "Guppy" & first_name == "Steve" ~ "M",
+           last_name == "Quaranta" & first_name == "Santino" ~ "M",
+           last_name == "Eskandarian" & first_name == "Alecko" ~ "F",
+           last_name == "Namoff" & first_name == "Bryan" ~ "D",
+           last_name == "Prideaux" & first_name == "Brandon" ~ "D",
+           last_name == "Carroll" & first_name == "Brian" ~ "M",
+           last_name == "Wilson" & first_name == "John" ~ "D",
+           last_name == "Stokes" & first_name == "David" ~ "D",
+           last_name == "Simms" & first_name == "Clyde" ~ "M",
+           last_name == "Thompson" & first_name == "Jason" ~ "F",
+           last_name == "Boswell" & first_name == "Bobby" ~ "D",
+           last_name == "Gros" & first_name == "Joshua" ~ "D-M",
+           last_name == "Van Sicklen" & first_name == "Nick" ~ "M",
+           last_name == "Arena" & first_name == "Kenny" ~ "D",
+           last_name == "Merritt" & first_name == "Tim" ~ "D",
+           last_name == "Walker" & first_name == "Jamil" ~ "M-F",
+           last_name == "Kuffour" & first_name == "Nana" ~ "F",
+           last_name == "Kuykendall" & first_name == "Shawn" ~ "M",
+           last_name == "Nickell" & first_name == "Matt" ~ "F",
+           last_name == "Wolff" & first_name == "Josh" ~ "F",
+           last_name == "Klein" & first_name == "Chris" ~ "M",
+           last_name == "Gutierrez" & first_name == "Diego" ~ "D",
+           last_name == "Zavagnin" & first_name == "Kerry" ~ "M",
+           last_name == "Garcia" & first_name == "Nick" ~ "D",
+           last_name == "Victorine" & first_name == "Sasha" ~ "M",
+           last_name == "Conrad" & first_name == "Jimmy" ~ "D",
+           last_name == "Amaud" & first_name == "Davy" ~ "M",
+           last_name == "Radosavljevic" & first_name == "Predrag" ~ "M",
+           last_name == "Burciaga" & first_name == "Jose" ~ "D",
+           last_name == "Thomas" & first_name == "Shavar" ~ "D",
+           last_name == "Walsh" & first_name == "Diego" ~ "M",
+           last_name == "Zotinca" & first_name == "Alex" ~ "D",
+           last_name == "Pore" & first_name == "Ryan" ~ "M",
+           last_name == "Sealy" & first_name == "Scott" ~ "F",
+           last_name == "Jewsbury" & first_name == "Jack" ~ "M",
+           last_name == "Branan" & first_name == "Dustin" ~ "D",
+           last_name == "Detter" & first_name == "Justin" ~ "F",
+           last_name == "Dobson" & first_name == "Daniel" ~ "D",
+           last_name == "Lascody" & first_name == "Doug" ~ "M",
+           last_name == "McGinnis" & first_name == "Pat" ~ "F",
+           last_name == "Mingawa-Webster" & first_name == "Josh" ~ "M",
+           last_name == "Raybould" & first_name == "Ryan" ~ "M-D",
+           last_name == "Roberts" & first_name == "Brian" ~ "D",
+           last_name == "Donovan" & first_name == "Landon" ~ "M-F",
+           last_name == "Kirovski" & first_name == "Jovan" ~ "M",
+           last_name == "Jones" & first_name == "Cobi" ~ "M",
+           last_name == "Albright" & first_name == "Chris" ~ "D",
+           last_name == "Marshall" & first_name == "Tyrone" ~ "D",
+           last_name == "Da Conceicao" & first_name == "Ednaldo" ~ "F",
+           last_name == "Chinchilla" & first_name == "Pablo" ~ "D",
+           last_name == "Kirk" & first_name == "Quavas" ~ "F",
+           last_name == "Vagenas" & first_name == "Peter" ~ "M",
+           last_name == "Nagamura" & first_name == "Paulo" ~ "M",
+           last_name == "Dunivant" & first_name == "Todd" ~ "D",
+           last_name == "Broome" & first_name == "Paul" ~ "M",
+           last_name == "Ngwenya" & first_name == "Joseph" ~ "F",
+           last_name == "Umana" & first_name == "Michael" ~ "D",
+           last_name == "Enfield" & first_name == "Michael" ~ "M-F",
+           last_name == "Gardner" & first_name == "Josh" ~ "M",
+           last_name == "Gravaboy" & first_name == "Ned" ~ "M",
+           last_name == "Ramirez" & first_name == "Guillermo" ~ "M",
+           last_name == "Ihemelu" & first_name == "Ugo" ~ "D",
+           last_name == "Chisoni" & first_name == "Mubarike" ~ "M",
+           last_name == "Gomez" & first_name == "Herculez" ~ "M-F",
+           last_name == "Benditson" & first_name == "Benjamin" ~ "D",
+           last_name == "Guevara" & first_name == "Anmado" ~ "M",
+           last_name == "Galvan Rey" & first_name == "Sergio" ~ "F",
+           last_name == "Razov" & first_name == "Ante" ~ "F",
+           last_name == "Agoos" & first_name == "Jeff" ~ "D",
+           last_name == "Djorkaeff" & first_name == "Youri" ~ "F-M",
+           last_name == "Gaven" & first_name == "Eddie" ~ "M",
+           last_name == "Suarez" & first_name == "Ryan" ~ "D",
+           last_name == "Leitch" & first_name == "Chris" ~ "D",
+           last_name == "Ibrahim" & first_name == "Abbe" ~ "F",
+           last_name == "Magee" & first_name == "Mike" ~ "M",
+           last_name == "Ward" & first_name == "Tim" ~ "D",
+           last_name == "Diallo" & first_name == "Ibrahima" ~ "F",
+           last_name == "Parke" & first_name == "Jeff" ~ "D",
+           last_name == "Mendes" & first_name == "Carlos" ~ "D",
+           last_name == "Bradley" & first_name == "Michael" ~ "M",
+           last_name == "Regan" & first_name == "Tim" ~ "D",
+           last_name == "Stammler" & first_name == "Seth" ~ "M-D",
+           last_name == "Bailey" & first_name == "Ramon" ~ "F",
+           last_name == "Corcoran" & first_name == "Chris" ~ "M",
+           last_name == "Hernandez" & first_name == "Jason" ~ "D",
+           last_name == "Ralston" & first_name == "Steve" ~ "M",
+           last_name == "Cancela" & first_name == "Jose" ~ "M",
+           last_name == "Twellman" & first_name == "Taylor" ~ "F",
+           last_name == "Joseph" & first_name == "Shalrie" ~ "M",
+           last_name == "Heaps" & first_name == "Jay" ~ "D",
+           last_name == "Franchino" & first_name == "Joey" ~ "M",
+           last_name == "Noonan" & first_name == "Pat" ~ "F",
+           last_name == "Oliveira" & first_name == "Cassio" ~ "M",
+           last_name == "John" & first_name == "Avery" ~ "D",
+           last_name == "Dempsey" & first_name == "Clint" ~ "F-M",
+           last_name == "Leonard" & first_name == "Marshall" ~ "M",
+           last_name == "Parkhurst" & first_name == "Mike" ~ "D",
+           last_name == "Smith" & first_name == "Khano" ~ "M",
+           last_name == "Connally" & first_name == "Edozien" ~ "F-M",
+           last_name == "Brillant" & first_name == "Felix" ~ "F-M",
+           last_name == "Flores" & first_name == "Gilberto" ~ "M",
+           last_name == "Doman" & first_name == "Andy" ~ "M",
+           last_name == "Riley" & first_name == "James" ~ "D",
+           last_name == "Vercollone" & first_name == "Luke" ~ "M",
+           last_name == "Holmes" & first_name == "Jamie" ~ "F",
+           last_name == "Larentowicz" & first_name == "Jeff" ~ "M",
+           last_name == "Latham" & first_name == "Ryan" ~ "F",
+           last_name == "Romaneiro" & first_name == "Marcos" ~ "M",
+           last_name == "Wilson" & first_name == "Easton" ~ "M",
+           last_name == "Ching" & first_name == "Brian" ~ "F",
+           last_name == "Barrett" & first_name == "Wade" ~ "D",
+           last_name == "Chung" & first_name == "Mark" ~ "M",
+           last_name == "Califf" & first_name == "Danny" ~ "D",
+           last_name == "DeRosario" & first_name == "Dwayne" ~ "M",
+           last_name == "Mullan" & first_name == "Brian" ~ "M",
+           last_name == "Dayak" & first_name == "Troy" ~ "D",
+           last_name == "Cerritos" & first_name == "Ronaldo" ~ "F",
+           last_name == "Davis" & first_name == "Brad" ~ "M",
+           last_name == "Russell" & first_name == "Ian" ~ "D",
+           last_name == "Waibel" & first_name == "Craig" ~ "D",
+           last_name == "Clark" & first_name == "Ricardo" ~ "M",
+           last_name == "Hart" & first_name == "Wes" ~ "M",
+           last_name == "Robinson" & first_name == "Eddie" ~ "D",
+           last_name == "Moreno" & first_name == "Alejandro" ~ "F",
+           last_name == "O'Rourke" & first_name == "Danny" ~ "M",
+           last_name == "Aloisi" & first_name == "Chrisi" ~ "D",
+           last_name == "Dombrowski" & first_name == "Tighe" ~ "M",
+           last_name == "Goldthwaite" & first_name == "Kevin" ~ "D",
+           last_name == "Levesque" & first_name == "Roger" ~ "F",
+           last_name == "Nash" & first_name == "Julian" ~ "F",
+           last_name == "Ramirez" & first_name == "Orlando" ~ "F",
+           last_name == "Rodriguez" & first_name == "Brett" ~ "D",
+           last_name == "Twellman" & first_name == "James" ~ "D",
+           last_name == "Wondolowski" & first_name == "Chris" ~ "F",
+           TRUE ~ "GK")) %>%
+  # drop missing values
+  drop_na()
+```
+
+```{r, echo = FALSE}
+# import sheet
+salary2006 <- read.csv("MLS Salaries 2006.csv")
+
+# cleaning dataset for analysis
+salary2006 <- salary2006 %>%
+  # separate Player columns into first and last names
+  separate(col = "Player", c("last_name", "first_name"), sep = ",") %>%
+  # remove whitespaces
+  mutate_if(is.character, str_trim) %>%
+  # add new variables for rowbinds later
+  mutate(year = 2006, 
+         DP = 0, 
+         base_salary = as.numeric(gsub('[$,]', '', base_salary)), 
+         guaranteed_compensation = as.numeric(gsub('[$,]', '', guaranteed_compensation)), 
+         club = case_when(last_name == "Adu" & first_name == "Freddy" ~ "DC",
+                          last_name == "Moreno" & first_name == "Jaime" ~ "DC",
+                          last_name == "Gomez" & first_name == "Cristian" ~ "DC",
+                          last_name == "Filomeno" & first_name == "Lucio" ~ "DC",
+                          last_name == "Olsen" & first_name == "Ben" ~ "DC",
+                          last_name == "Quaranta" & first_name == "Santino" ~ "DC",
+                          last_name == "Eskandarian" & first_name == "Alecko" ~ "DC",
+                          last_name == "Erpen" & first_name == "Facundo" ~ "DC",
+                          last_name == "Rimando" & first_name == "Nick" ~ "DC",
+                          last_name == "Namoff" & first_name == "Bryan" ~ "DC",
+                          last_name == "Prideaux" & first_name == "Brandon" ~ "DC",
+                          last_name == "Gros" & first_name == "Joshua" ~ "DC",
+                          last_name == "Carroll" & first_name == "Brian" ~ "DC",
+                          last_name == "Simms" & first_name == "Clyde" ~ "DC",
+                          last_name == "Wilson" & first_name == "John" ~ "DC",
+                          last_name == "Stokes" & first_name == "David" ~ "DC",
+                          last_name == "Boswell" & first_name == "Robert" ~ "DC",
+                          last_name == "Perkins" & first_name == "Troy" ~ "DC",
+                          last_name == "Walker" & first_name == "Jamil" ~ "DC",
+                          last_name == "Dyachenko" & first_name == "Rod" ~ "DC",
+                          last_name == "Moose" & first_name == "Justin" ~ "DC",
+                          last_name == "Nickell" & first_name == "Matt" ~ "DC",
+                          last_name == "Carroll" & first_name == "Jeff" ~ "DC",
+                          last_name == "DeRoux" & first_name == "Stephen" ~ "DC",
+                          last_name == "McIntosh" & first_name == "Ryan" ~ "DC",
+                          last_name == "McTavish" & first_name == "Devon" ~ "DC",
+                          last_name == "Mediate" & first_name == "Domenic" ~ "DC",
+                          last_name == "Metcalf" & first_name == "Andy" ~ "DC",
+                          last_name == "Sanneh" & first_name == "Tony" ~ "CHI",
+                          last_name == "Armas" & first_name == "Chris" ~ "CHI",
+                          last_name == "Herron" & first_name == "Andy" ~ "CHI",
+                          last_name == "Guerrero" & first_name == "Ivan" ~ "CHI",
+                          last_name == "Thornton" & first_name == "Zach" ~ "CHI",
+                          last_name == "Curtin" & first_name == "Jim" ~ "CHI",
+                          last_name == "Gutierrez" & first_name == "Diego" ~ "CHI",
+                          last_name == "Brown" & first_name == "C.J." ~ "CHI",
+                          last_name == "Mapp" & first_name == "Justin" ~ "CHI",
+                          last_name == "Thorrington" & first_name == "John" ~ "CHI",
+                          last_name == "Pause" & first_name == "Logan" ~ "CHI",
+                          last_name == "Carr" & first_name == "Calen" ~ "CHI",
+                          last_name == "Jaqua" & first_name == "Nate" ~ "CHI",
+                          last_name == "Rolfe" & first_name == "Chris" ~ "CHI",
+                          last_name == "Segares" & first_name == "Gonzalo" ~ "CHI",
+                          last_name == "Barrett" & first_name == "Chad" ~ "CHI",
+                          last_name == "Correa" & first_name == "Thiago" ~ "CHI",
+                          last_name == "Stewart" & first_name == "Jack" ~ "CHI",
+                          last_name == "Capano" & first_name == "Craig" ~ "CHI",
+                          last_name == "Pickens" & first_name == "Matt" ~ "CHI",
+                          last_name == "Griffin" & first_name == "Leonard" ~ "CHI",
+                          last_name == "Mahoney" & first_name == "David" ~ "CHI",
+                          last_name == "Montz" & first_name == "Jared" ~ "CHI",
+                          last_name == "Curtin" & first_name == "Jeff" ~ "CHI",
+                          last_name == "Franks" & first_name == "Floyd" ~ "CHI",
+                          last_name == "Plotkin" & first_name == "Brian" ~ "CHI",
+                          last_name == "Robinson" & first_name == "Dasan" ~ "CHI",
+                          last_name == "Russolillo" & first_name == "Jordan" ~ "CHI",
+                          last_name == "Hejduk" & first_name == "Frankie" ~ "CLB",
+                          last_name == "Rozental" & first_name == "Sebastian" ~ "CLB",
+                          last_name == "Gaven" & first_name == "Eddie" ~ "CLB",
+                          last_name == "Gonzalez" & first_name == "Marcos" ~ "CLB",
+                          last_name == "Walker" & first_name == "Jonny" ~ "CLB",
+                          last_name == "Marshall" & first_name == "Chad" ~ "CLB",
+                          last_name == "Busch" & first_name == "Jon" ~ "CLB",
+                          last_name == "Oughton" & first_name == "Duncan" ~ "CLB",
+                          last_name == "Martino" & first_name == "Kyle" ~ "CLB",
+                          last_name == "Kotschau" & first_name == "Richard" ~ "CLB",
+                          last_name == "Thomas" & first_name == "Jacob" ~ "CLB",
+                          last_name == "Wolyniec" & first_name == "John" ~ "CLB",
+                          last_name == "Pierce" & first_name == "Rusty" ~ "CLB",
+                          last_name == "Szetela" & first_name == "Danny" ~ "CLB",
+                          last_name == "Garey" & first_name == "Jason" ~ "CLB",
+                          last_name == "Ward" & first_name == "Tim" ~ "CLB",
+                          last_name == "Kamara" & first_name == "Kei" ~ "CLB",
+                          last_name == "Kitamirike" & first_name == "Joel" ~ "CLB",
+                          last_name == "Retiz" & first_name == "Jose" ~ "CLB",
+                          last_name == "Zayner" & first_name == "Jed" ~ "CLB",
+                          last_name == "Moss" & first_name == "Brandon" ~ "CLB",
+                          last_name == "Cameron" & first_name == "Knox" ~ "CLB",
+                          last_name == "Vasquez" & first_name == "Eric" ~ "CLB",
+                          last_name == "Becerra" & first_name == "Ivan" ~ "CLB",
+                          last_name == "Gaudette" & first_name == "Bill" ~ "CLB",
+                          last_name == "Gruenebaum" & first_name == "Andy" ~ "CLB",
+                          last_name == "O'Brien" & first_name == "Dayton" ~ "CLB",
+                          last_name == "Mathis" & first_name == "Clint" ~ "COL",
+                          last_name == "Mastroeni" & first_name == "Pablo" ~ "COL",
+                          last_name == "Cannon" & first_name == "Joe" ~ "COL",
+                          last_name == "Kirovski" & first_name == "Jovan" ~ "COL",
+                          last_name == "Ben-Dayan" & first_name == "Dedi" ~ "COL",
+                          last_name == "Petke" & first_name == "Mike" ~ "COL",
+                          last_name == "Hernandez" & first_name == "Nicolas" ~ "COL",
+                          last_name == "Cooke" & first_name == "Terry" ~ "COL",
+                          last_name == "Beckerman" & first_name == "Kyle" ~ "COL",
+                          last_name == "Denton" & first_name == "Eric" ~ "COL",
+                          last_name == "Peguero" & first_name == "Jean Phillippe" ~ "COL",
+                          last_name == "Peterson" & first_name == "Jacob" ~ "COL",
+                          last_name == "Wingert" & first_name == "Chris" ~ "COL",
+                          last_name == "Jordan" & first_name == "Matt" ~ "COL",
+                          last_name == "Freeman" & first_name == "Hunter" ~ "COL",
+                          last_name == "Gonzalez" & first_name == "Luchi" ~ "COL",
+                          last_name == "Crawford" & first_name == "Matt" ~ "COL",
+                          last_name == "Noel" & first_name == "Fabrice" ~ "COL",
+                          last_name == "Coundoul" & first_name == "Bouna" ~ "COL",
+                          last_name == "Gargan" & first_name == "Daniel" ~ "COL",
+                          last_name == "Gotsmanov" & first_name == "Sasha" ~ "COL",
+                          last_name == "Clark" & first_name == "Colin" ~ "COL",
+                          last_name == "Harvey" & first_name == "Jordan" ~ "COL",
+                          last_name == "Keel" & first_name == "Stephen" ~ "COL",
+                          last_name == "King" & first_name == "Aaron" ~ "COL",
+                          last_name == "Wasson" & first_name == "Daniel" ~ "COL",
+                          last_name == "Ruiz" & first_name == "Carlos" ~ "DAL",
+                          last_name == "Vanney" & first_name == "Greg" ~ "DAL",
+                          last_name == "Mulrooney" & first_name == "Richard" ~ "DAL",
+                          last_name == "Valakari" & first_name == "Simo" ~ "DAL",
+                          last_name == "O'Brien" & first_name == "Ronnie" ~ "DAL",
+                          last_name == "Nunez" & first_name == "Ramon" ~ "DAL",
+                          last_name == "Sala" & first_name == "Dario" ~ "DAL",
+                          last_name == "Mina" & first_name == "Roberto" ~ "DAL",
+                          last_name == "Rhine" & first_name == "Bobby" ~ "DAL",
+                          last_name == "Gbandi" & first_name == "Chris" ~ "DAL",
+                          last_name == "Wilson" & first_name == "Mark" ~ "DAL",
+                          last_name == "Cooper" & first_name == "Kenny" ~ "DAL",
+                          last_name == "Cassar" & first_name == "Jeff" ~ "DAL",
+                          last_name == "Moor" & first_name == "Drew" ~ "DAL",
+                          last_name == "Goodson" & first_name == "Clarence" ~ "DAL",
+                          last_name == "Moore" & first_name == "Justin" ~ "DAL",
+                          last_name == "Alvarez" & first_name == "Arturo" ~ "DAL",
+                          last_name == "McCarty" & first_name == "Dax" ~ "DAL",
+                          last_name == "Wagner" & first_name == "Blake" ~ "DAL",
+                          last_name == "Wagenfuhr" & first_name == "David" ~ "DAL",
+                          last_name == "Yi" & first_name == "Alex" ~ "DAL",
+                          last_name == "Thompson" & first_name == "Abe" ~ "DAL",
+                          last_name == "Dello-Russo" & first_name == "Michael" ~ "DAL",
+                          last_name == "Pitchkolan" & first_name == "Aaron" ~ "DAL",
+                          last_name == "Torres" & first_name == "Mario" ~ "DAL",
+                          last_name == "Burse" & first_name == "Ray" ~ "DAL",
+                          last_name == "Guante" & first_name == "Miguel" ~ "DAL",
+                          last_name == "Oduro" & first_name == "Dominic" ~ "DAL",
+                          last_name == "Johnson" & first_name == "Eddie" ~ "KC",
+                          last_name == "Wolff" & first_name == "Josh" ~ "KC",
+                          last_name == "Zavagnin" & first_name == "Kerry" ~ "KC",
+                          last_name == "Garcia" & first_name == "Nick" ~ "KC",
+                          last_name == "Victorine" & first_name == "Sasha" ~ "KC",
+                          last_name == "Conrad" & first_name == "Jimmy" ~ "KC",
+                          last_name == "Arnaud" & first_name == "Davy" ~ "KC",
+                          last_name == "Burciaga" & first_name == "Jose" ~ "KC",
+                          last_name == "Hue" & first_name == "Jermaine" ~ "KC",
+                          last_name == "Thomas" & first_name == "Shavar" ~ "KC",
+                          last_name == "Oshoniyi" & first_name == "Bo" ~ "KC",
+                          last_name == "Zotinca" & first_name == "Alex" ~ "KC",
+                          last_name == "Pore" & first_name == "Ryan" ~ "KC",
+                          last_name == "Movsisyan" & first_name == "Yura" ~ "KC",
+                          last_name == "John" & first_name == "Will" ~ "KC",
+                          last_name == "Sealy" & first_name == "Scott" ~ "KC",
+                          last_name == "Hesmer" & first_name == "William" ~ "KC",
+                          last_name == "Jewsbury" & first_name == "Jack" ~ "KC",
+                          last_name == "Groenwald" & first_name == "Matthew" ~ "KC",
+                          last_name == "Raybould" & first_name == "Ryan" ~ "KC",
+                          last_name == "Wahl" & first_name == "Tyson" ~ "KC",
+                          last_name == "Roberts" & first_name == "Brian" ~ "KC",
+                          last_name == "Kronberg" & first_name == "Eric" ~ "KC",
+                          last_name == "McMahen" & first_name == "Ryan" ~ "KC",
+                          last_name == "Raad" & first_name == "Sergei" ~ "KC",
+                          last_name == "Shirley" & first_name == "Stephen" ~ "KC",
+                          last_name == "Watson" & first_name == "Lance" ~ "KC",
+                          last_name == "Donovan" & first_name == "Landon" ~ "LA",
+                          last_name == "Jones" & first_name == "Cobi" ~ "LA",
+                          last_name == "Hartman" & first_name == "Kevin" ~ "LA",
+                          last_name == "Vagenas" & first_name == "Peter" ~ "LA",
+                          last_name == "Albright" & first_name == "Chris" ~ "LA",
+                          last_name == "Gonzalez" & first_name == "Guillermo" ~ "LA",
+                          last_name == "Marshall" & first_name == "Tyrone" ~ "LA",
+                          last_name == "Kirk" & first_name == "Quavas" ~ "LA",
+                          last_name == "Dunivant" & first_name == "Todd" ~ "LA",
+                          last_name == "Saragosa" & first_name == "Marcelo" ~ "LA",
+                          last_name == "Nagamura" & first_name == "Paulo" ~ "LA",
+                          last_name == "Dunseth" & first_name == "Brian" ~ "LA",
+                          last_name == "Sturgis" & first_name == "Nathan" ~ "LA",
+                          last_name == "Glen" & first_name == "Cornell" ~ "LA",
+                          last_name == "Ngwenya" & first_name == "Joseph" ~ "LA",
+                          last_name == "Ihemelu" & first_name == "Ugo" ~ "LA",
+                          last_name == "Gomez" & first_name == "Hercules" ~ "LA",
+                          last_name == "Grabavoy" & first_name == "Ned" ~ "LA",
+                          last_name == "Enfield" & first_name == "Michael" ~ "LA",
+                          last_name == "Cronin" & first_name == "Steve" ~ "LA",
+                          last_name == "Gardner" & first_name == "Josh" ~ "LA",
+                          last_name == "Gordon" & first_name == "Alan" ~ "LA",
+                          last_name == "Roberts" & first_name == "Troy" ~ "LA",
+                          last_name == "Burch" & first_name == "Marc" ~ "LA",
+                          last_name == "Saunders" & first_name == "Josh" ~ "LA",
+                          last_name == "Veris" & first_name == "Kyle" ~ "LA",
+                          last_name == "Benditson" & first_name == "Benjamin" ~ "LA",
+                          last_name == "Twellman" & first_name == "Taylor" ~ "NE",
+                          last_name == "Joseph" & first_name == "Shalrie" ~ "NE",
+                          last_name == "Ralston" & first_name == "Steve" ~ "NE",
+                          last_name == "Hernandez" & first_name == "Daniel" ~ "NE",
+                          last_name == "Cancela" & first_name == "Jose" ~ "NE",
+                          last_name == "Franchino" & first_name == "Joey" ~ "NE",
+                          last_name == "Heaps" & first_name == "Jay" ~ "NE",
+                          last_name == "Reis" & first_name == "Matt" ~ "NE",
+                          last_name == "Noonan" & first_name == "Pat" ~ "NE",
+                          last_name == "Dempsey" & first_name == "Clint" ~ "NE",
+                          last_name == "Parkhurst" & first_name == "Michael" ~ "NE",
+                          last_name == "Leonard" & first_name == "Marshall" ~ "NE",
+                          last_name == "Smith" & first_name == "Khano" ~ "NE",
+                          last_name == "Sims" & first_name == "Willie" ~ "NE",
+                          last_name == "John" & first_name == "Avery" ~ "NE",
+                          last_name == "Dorman" & first_name == "Andy" ~ "NE",
+                          last_name == "Riley" & first_name == "James" ~ "NE",
+                          last_name == "Warren" & first_name == "Doug" ~ "NE",
+                          last_name == "Lochhead" & first_name == "Tony" ~ "NE",
+                          last_name == "Brown" & first_name == "Kyle" ~ "NE",
+                          last_name == "Larentowicz" & first_name == "Jeff" ~ "NE",
+                          last_name == "Latham" & first_name == "Ryan" ~ "NE",
+                          last_name == "De Oliveira" & first_name == "Leandro" ~ "NE",
+                          last_name == "Galik" & first_name == "Jani" ~ "NE",
+                          last_name == "Haggerty" & first_name == "Patrick" ~ "NE",
+                          last_name == "Tomasso" & first_name == "T.J." ~ "NE",
+                          last_name == "Guevara" & first_name == "Amado" ~ "NYR",
+                          last_name == "Djorkaeff" & first_name == "Youri" ~ "NYR",
+                          last_name == "Wynne" & first_name == "Marvell" ~ "NYR",
+                          last_name == "Canero" & first_name == "Peter" ~ "NYR",
+                          last_name == "Henderson" & first_name == "Chris" ~ "NYR",
+                          last_name == "Meola" & first_name == "Tony" ~ "NYR",
+                          last_name == "Buddle" & first_name == "Edson" ~ "NYR",
+                          last_name == "Altidore" & first_name == "Josmer" ~ "NYR",
+                          last_name == "Jolley" & first_name == "Steve" ~ "NYR",
+                          last_name == "Lisi" & first_name == "Mark" ~ "NYR",
+                          last_name == "Martins" & first_name == "Thiago" ~ "NYR",
+                          last_name == "Magee" & first_name == "Mike" ~ "NYR",
+                          last_name == "Conway" & first_name == "Jon" ~ "NYR",
+                          last_name == "Parke" & first_name == "Jeff" ~ "NYR",
+                          last_name == "Mendes" & first_name == "Carlos" ~ "NYR",
+                          last_name == "Graham" & first_name == "Taylor" ~ "NYR",
+                          last_name == "O'Rourke" & first_name == "Danny" ~ "NYR",
+                          last_name == "Arvizu" & first_name == "David" ~ "NYR",
+                          last_name == "Stammler" & first_name == "Seth" ~ "NYR",
+                          last_name == "Camp" & first_name == "Blake" ~ "NYR",
+                          last_name == "Cila" & first_name == "Jordan" ~ "NYR",
+                          last_name == "Ikangu" & first_name == "Elie" ~ "NYR",
+                          last_name == "Behonick" & first_name == "Michael" ~ "NYR",
+                          last_name == "Laventure" & first_name == "Jerrod" ~ "NYR",
+                          last_name == "Vide" & first_name == "Joe" ~ "NYR",
+                           TRUE ~ "NOT IN PANEL"
+         )) %>%
+  # keep only teams in balanced panel
+  filter(club != "NOT IN PANEL")
+
+st(salary2006)
+```
+
+```{r, echo = FALSE}
+# import sheet
+salary2007 <- read.csv("mls-salaries-2007.csv")
+
+# filtering and cleaning dataset
+salary2007 <- salary2007 %>%
+  # create new variables for analysis
+  mutate(year = "2007", 
+         # hardcoding DPs
+         DP = case_when(
+    last_name == "Blanco" ~ 1,
+    last_name == "De Oliveira" ~ 1,
+    last_name == "Beckham" ~ 1,
+    last_name == "Reyna" ~ 1,
+    last_name == "Angel" ~ 1,
+    TRUE ~ 0
+  )) %>%
+  # filtering out teams for balanced panel
+  filter(club == "CHI" | 
+         club == "COL" | 
+         club == "CLB" | 
+         club == "DAL" | 
+         club == "DC" | 
+         club == "KC" | 
+         club == "LA" |
+         club == "NE" |
+         club == "NY") %>%
+  # recode team abbreviations for teams in panel
+  mutate(club = case_match(club,
+                    "CLB" ~ "CLB",
+                    "CHI" ~ "CHI", 
+                    "COL" ~ "COL",
+                    "DAL" ~ "DAL",
+                    "DC" ~ "DC",
+                    "KC" ~ "KC",
+                    "LA" ~ "LA",
+                    "NY" ~ "NYR",
+                    "NE" ~ "NE"))
+  
+# summary stats for year
+st(salary2007)
+
+salary2007 %>%
+  group_by(club) %>%
+  ggplot(aes(x = club, y = base_salary)) +
+  geom_boxplot() +
+  scale_y_continuous(breaks = seq(0, 6000000, by = 1000000))
+```
+Here are the summary salary statistics for 2007. 
+
+```{r, echo = FALSE}
+# import sheet
+salary2008 <- read.csv("mls-salaries-2008.csv")
+
+# summary statistics for console
+salary2008 %>%
+  sapply(summary)
+
+# summary table for statistics
+st(salary2008)
+
+# filtering and cleaning data
+salary2008 <- salary2008 %>%
+  # add new variables
+  mutate(year = "2008", 
+         DP = case_when(
+    last_name == "Blanco" ~ 1,
+    last_name == "Emilio" ~ 1,
+    last_name == "Gallardo" ~ 1,
+    last_name == "Lopez" ~ 1,
+    last_name == "Beckham" ~ 1,
+    last_name == "Reyna" ~ 1,
+    last_name == "Angel" ~ 1,
+    TRUE ~ 0)) %>%
+  # remove observations without salary data
+  filter(!is.na(base_salary)) %>%
+    # filtering out teams for balanced panel
+  filter(club == "CHI" | 
+         club == "COL" | 
+         club == "CLB" | 
+         club == "DAL" | 
+         club == "DC" | 
+         club == "KC" | 
+         club == "LA" |
+         club == "NE" |
+         club == "NY") %>%
+  # recode team abbreviations for teams in panel
+  mutate(club = case_match(club,
+                    "CLB" ~ "CLB",
+                    "CHI" ~ "CHI", 
+                    "COL" ~ "COL",
+                    "DAL" ~ "DAL",
+                    "DC" ~ "DC",
+                    "KC" ~ "KC",
+                    "LA" ~ "LA",
+                    "NY" ~ "NYR",
+                    "NE" ~ "NE"))
+  
+# boxplot  by team
+salary2008 %>%
+  group_by(club) %>%
+  ggplot(aes(x = club, y = base_salary)) +
+  geom_boxplot() +
+  scale_y_continuous(breaks = seq(0, 6000000, by = 1000000))
+```
+Here are the summary salary statistics for 2008. 
+
+```{r, echo = FALSE}
+# import sheet
+salary2009 <- read.csv("mls-salaries-2009.csv")
+
+# summary statistics for console
+salary2009 %>%
+  sapply(summary)
+
+# filtering and cleaning dataset
+salary2009 <- salary2009 %>%
+  # add new variables for analysis
+  mutate(year = "2009", 
+         DP = case_when(
+    last_name == "Blanco" ~ 1,
+    last_name == "Schelotto" ~ 1,
+    last_name == "Ferreira" ~ 1,
+    last_name == "Emilio" ~ 1,
+    last_name == "Landin" ~ 1,
+    last_name == "Beckham" ~ 1,
+    last_name == "Angel" ~ 1,
+    last_name == "Ljungberg" ~ 1,
+    last_name == "de Guzman" ~ 1,
+    TRUE ~ 0)) %>%
+    # filtering out teams for balanced panel
+  filter(club == "CHI" | 
+         club == "COL" | 
+         club == "CLB" | 
+         club == "DAL" | 
+         club == "DC" | 
+         club == "KC" | 
+         club == "LA" |
+         club == "NE" |
+         club == "NY") %>%
+  # recode team abbreviations for teams in panel
+  mutate(club = case_match(club,
+                    "CLB" ~ "CLB",
+                    "CHI" ~ "CHI", 
+                    "COL" ~ "COL",
+                    "DAL" ~ "DAL",
+                    "DC" ~ "DC",
+                    "KC" ~ "KC",
+                    "LA" ~ "LA",
+                    "NY" ~ "NYR",
+                    "NE" ~ "NE"))
+
+# summary table
+st(salary2009)
+
+# boxplot by team
+salary2009 %>%
+  group_by(club) %>%
+  ggplot(aes(x = club, y = base_salary)) +
+  geom_boxplot() +
+  scale_y_continuous(breaks = seq(0, 6000000, by = 1000000))
+```
+Here are the summary salary statistics for 2009. 
+
+```{r, echo = FALSE}
+# import sheet
+salary2010 <- read.csv("mls-salaries-2010.csv")
+
+# summary stats for console
+salary2010 %>%
+  sapply(summary)
+
+# filter and clean data
+salary2010 <- salary2010 %>%
+  # new variables for analysis
+  mutate(year = "2010", 
+         DP = case_when(
+           last_name == "Ljungberg" ~ 1,
+           last_name == "Castillo" ~ 1,
+           last_name == "Schelotto" ~ 1,
+           last_name == "Mendoza" ~ 1,
+           last_name == "Ferreira" ~ 1,
+           last_name == "Boskovic" ~ 1,
+           last_name == "Landin" ~ 1,
+           last_name == "Beckham" ~ 1,
+           last_name == "Donovan" ~ 1,
+           last_name == "Angel" ~ 1,
+           last_name == "Henry" ~ 1,
+           last_name == "Marquez" ~ 1,
+           last_name == "Fernandez" ~ 1,
+           last_name == "Nkufo" ~ 1,
+           last_name == "de Guzman" ~ 1,
+           last_name == "Martinez" ~ 1,
+           TRUE ~ 0)) %>%
+    # filtering out teams for balanced panel
+  filter(club == "CHI" | 
+         club == "COL" | 
+         club == "CLB" | 
+         club == "DAL" | 
+         club == "DC" | 
+         club == "KC" | 
+         club == "LA" |
+         club == "NE" |
+         club == "NY") %>%
+  # recode team abbreviations for teams in panel
+  mutate(club = case_match(club,
+                    "CLB" ~ "CLB",
+                    "CHI" ~ "CHI", 
+                    "COL" ~ "COL",
+                    "DAL" ~ "DAL",
+                    "DC" ~ "DC",
+                    "KC" ~ "KC",
+                    "LA" ~ "LA",
+                    "NY" ~ "NYR",
+                    "NE" ~ "NE"))
+
+# summary table
+st(salary2010)
+
+# boxplot by team
+salary2010 %>%
+  group_by(club) %>%
+  ggplot(aes(x = club, y = base_salary)) +
+  geom_boxplot() +
+  scale_y_continuous(breaks = seq(0, 6000000, by = 1000000))
+```
+Here are the summary salary statistics for 2010. 
+
+```{r, echo = FALSE}
+# import sheet
+salary2011 <- read.csv("mls-salaries-2011.csv")
+
+# summary stats for console
+salary2011 %>%
+  sapply(summary)
+
+# filter and clean data
+salary2011 <- salary2011 %>%
+  # add new variables for analysis
+  mutate(year = "2011", 
+         DP = case_when(
+           last_name == "Angel" ~ 1,
+           last_name == "Mendoza" ~ 1,
+           last_name == "Ferreira" ~ 1,
+           last_name == "Castillo" ~ 1,
+           last_name == "Boskovic" ~ 1,
+           last_name == "DeRosario" ~ 1,
+           last_name == "Bravo" ~ 1,
+           last_name == "Jeferson" ~ 1,
+           last_name == "Beckham" ~ 1,
+           last_name == "Donovan" ~ 1,
+           last_name == "Angel" ~ 1,
+           last_name == "Keane" ~ 1,
+           last_name == "Caraglio" ~ 1,
+           last_name == "Henry" ~ 1,
+           last_name == "Marquez" ~ 1,
+           last_name == "Rost" ~ 1,
+           last_name == "Adu" ~ 1,
+           last_name == "Chara" ~ 1,
+           last_name == "Saborio" ~ 1,
+           last_name == "Morales" ~ 1,
+           last_name == "Fernandez" ~ 1,
+           last_name == "Montero" ~ 1,
+           last_name == "Rosales" ~ 1,
+           last_name == "de Guzman" ~ 1,
+           last_name == "Koevermans" ~ 1,
+           last_name == "Frings" ~ 1,
+           last_name == "Hassli" ~ 1,
+           last_name == "Jarju" ~ 1,
+           TRUE ~ 0
+         )) %>%
+    # filtering out teams for balanced panel
+  filter(club == "CHI" | 
+         club == "COL" | 
+         club == "CLB" | 
+         club == "DAL" | 
+         club == "DC" | 
+         club == "KC" | 
+         club == "LA" |
+         club == "NE" |
+         club == "NY") %>%
+  # recode team abbreviations for teams in panel
+  mutate(club = case_match(club,
+                    "CLB" ~ "CLB",
+                    "CHI" ~ "CHI", 
+                    "COL" ~ "COL",
+                    "DAL" ~ "DAL",
+                    "DC" ~ "DC",
+                    "KC" ~ "KC",
+                    "LA" ~ "LA",
+                    "NY" ~ "NYR",
+                    "NE" ~ "NE"))
+
+# summary table
+st(salary2011)
+
+# boxplot by team
+salary2011 %>%
+  group_by(club) %>%
+  ggplot(aes(x = club, y = base_salary)) +
+  geom_boxplot() +
+  scale_y_continuous(breaks = seq(0, 6000000, by = 1000000))
+```
+Here are the summary salary statistics for 2011. 
+
+```{r, echo = FALSE}
+# import sheet
+salary2012 <- read.csv("mls-salaries-2012.csv")
+
+# summary stats for console
+salary2012 %>%
+  sapply(summary)
+
+# filter and clean data
+salary2012 <- salary2012 %>%
+  # add new variables for analysis
+  mutate(year = "2012", 
+         DP = case_when(
+          last_name == "Fernandez" ~ 1,
+          last_name == "MacDonald" ~ 1,
+          last_name == "Puppo" ~ 1,
+          last_name == "Angel" ~ 1,
+          last_name == "Minda" ~ 1,
+          last_name == "Joseph" ~ 1,
+          last_name == "Higuain" ~ 1,
+          last_name == "Ferreira" ~ 1,
+          last_name == "Castillo" ~ 1,
+          last_name == "de Guzman" ~ 1,
+          last_name == "Boskovic" ~ 1,
+          last_name == "DeRosario" ~ 1,
+          last_name == "Salihi" ~ 1,
+          last_name == "Garcia" & first_name == "Oscar" ~ 1,
+          last_name == "Barnes" ~ 1,
+          last_name == "Beckham" ~ 1,
+          last_name == "Donovan" ~ 1,
+          last_name == "Keane" ~ 1,
+          last_name == "Di Vaio" ~ 1,
+          last_name == "Joseph" ~ 1,
+          last_name == "Bengtson" ~ 1,
+          last_name == "Henry" ~ 1,
+          last_name == "Marquez" ~ 1,
+          last_name == "Cahill" ~ 1,
+          last_name == "Adu" ~ 1,
+          last_name == "Chara" ~ 1,
+          last_name == "Boyd" ~ 1,
+          last_name == "Saborio" ~ 1,
+          last_name == "Morales" ~ 1,
+          last_name == "Fernandez" ~ 1,
+          last_name == "Montero" ~ 1,
+          last_name == "Rosales" ~ 1,
+          last_name == "Tiffert" ~ 1,
+          last_name == "Koevermans" ~ 1,
+          last_name == "Frings" ~ 1,
+          last_name == "Hassli" ~ 1,
+          last_name == "Robson" ~ 1,
+          last_name == "Miller" & first_name == "Kenny" ~ 1,
+          TRUE ~ 0)) %>%
+    # filtering out teams for balanced panel
+  filter(club == "CHI" | 
+         club == "COL" | 
+         club == "CLB" | 
+         club == "DAL" | 
+         club == "DC" | 
+         club == "KC" | 
+         club == "LA" |
+         club == "NE" |
+         club == "NY") %>%
+  # recode team abbreviations for teams in panel
+  mutate(club = case_match(club,
+                    "CLB" ~ "CLB",
+                    "CHI" ~ "CHI", 
+                    "COL" ~ "COL",
+                    "DAL" ~ "DAL",
+                    "DC" ~ "DC",
+                    "KC" ~ "KC",
+                    "LA" ~ "LA",
+                    "NY" ~ "NYR",
+                    "NE" ~ "NE"))
+
+# summary table
+st(salary2012)
+
+# boxplot by team
+salary2012 %>%
+  group_by(club) %>%
+  ggplot(aes(x = club, y = base_salary)) +
+  geom_boxplot() +
+  scale_y_continuous(breaks = seq(0, 6000000, by = 1000000))
+```
+Here are the summary salary statistics for 2012.
+
+```{r, echo = FALSE}
+# import sheet
+salary2013 <- read.csv("mls-salaries-2013.csv")
+
+# summary stats for console
+salary2013 %>%
+  sapply(summary)
+
+# filter and clean data
+salary2013 <- salary2013 %>%
+  # add new variables for analysis
+  mutate(year = "2013",
+         DP = case_when(
+           last_name == "Fernandez" ~ 1,
+           last_name == "MacDonald" ~ 1,
+           last_name == "Puppo" ~ 1,
+           last_name == "Rios" ~ 1,
+           last_name == "Anangono" ~ 1,
+           last_name == "Minda" ~ 1,
+           last_name == "Torres" & first_name == "Erick" ~ 1,
+           last_name == "Torres" & first_name == "Gabriel" ~ 1,
+           last_name == "Higuain" ~ 1,
+           last_name == "Ferreira" ~ 1,
+           last_name == "Castillo" ~ 1,
+           last_name == "Hassli" ~ 1,
+           last_name == "Diaz" ~ 1,
+           last_name == "DeRosario" ~ 1,
+           last_name == "Boniek Garcia" ~ 1,
+           last_name == "Barnes" & first_name == "Giles" ~ 1,
+           last_name == "Lopez" & first_name == "Alexander" ~ 1,
+           last_name == "Bieler" & first_name == "Claudio" ~ 1,
+           last_name == "Donovan" & first_name == "Landon" ~ 1,
+           last_name == "Keane" & first_name == "Robbie" ~ 1,
+           last_name == "Gonzalez" & first_name == "Omar" ~ 1,
+           last_name == "Di Vaio" & first_name == "Marco" ~ 1,
+           last_name == "Bernardello" & first_name == "Hernan" ~ 1,
+           last_name == "Bengtson" & first_name == "Jerry" ~ 1,
+           last_name == "Henry" & first_name == "Thierry" ~ 1,
+           last_name == "Cahill" ~ 1,
+           last_name == "Barnes" & first_name == "Giles" ~ 1,
+           last_name == "Kleberson" ~ 1,
+           last_name == "Chara" ~ 1,
+           last_name == "Valeri" ~ 1,
+           last_name == "Barnes" & first_name == "Giles" ~ 1,
+           last_name == "Saborio" ~ 1,
+           last_name == "Morales" & first_name == "Javier" ~ 1,
+           last_name == "Wondolowski" ~ 1,
+           last_name == "Rosales" & first_name == "Mauro" ~ 1,
+           last_name == "Tiffert" ~ 1,
+           last_name == "Joseph" & first_name == "Shalrie" ~ 1,
+           last_name == "Obafemi" ~ 1,
+           last_name == "Dempsey" & first_name == "Clint" ~ 1,
+           last_name == "Koevermans" & first_name == "Danny" ~ 1,
+           last_name == "Laba" ~ 1,
+           last_name == "Miller" & first_name == "Kenny" ~ 1,
+           TRUE ~ 0)) %>%
+    # filtering out teams for balanced panel
+  filter(club == "CHI" | 
+         club == "COL" | 
+         club == "CLB" | 
+         club == "DAL" | 
+         club == "DC" | 
+         club == "KC" | 
+         club == "LA" |
+         club == "NE" |
+         club == "NY") %>%
+  # recode team abbreviations for teams in panel
+  mutate(club = case_match(club,
+                    "CLB" ~ "CLB",
+                    "CHI" ~ "CHI", 
+                    "COL" ~ "COL",
+                    "DAL" ~ "DAL",
+                    "DC" ~ "DC",
+                    "KC" ~ "KC",
+                    "LA" ~ "LA",
+                    "NY" ~ "NYR",
+                    "NE" ~ "NE"))
+
+# summary table
+st(salary2013)
+
+# boxplot by team
+salary2013 %>%
+  group_by(club) %>%
+  ggplot(aes(x = club, y = base_salary)) +
+  geom_boxplot() +
+  scale_y_continuous(breaks = seq(0, 6000000, by = 1000000))
+```
+Here are the summary salary statistics for 2013.
+
+```{r, echo = FALSE}
+# import sheet
+salary2014 <- read.csv("mls-salaries-2014.csv")
+
+# summary stats on console
+salary2014 %>%
+  sapply(summary)
+
+# filter and clean data
+salary2014 <- salary2014 %>%
+  # add new variables for analysis
+  mutate(year = "2014", 
+         DP = case_when(
+           last_name == "Puppo" ~ 1,
+           last_name == "Anangono" ~ 1,
+           last_name == "Minda" ~ 1,
+           last_name == "Torres" & first_name == "Erick" ~ 1,
+           last_name == "Torres" & first_name == "Gabriel" ~ 1,
+           last_name == "Rosales" ~ 1,
+           last_name == "Higuain" ~ 1,
+           last_name == "Castillo" ~ 1,
+           last_name == "Diaz" ~ 1,
+           last_name == "Escobar" ~ 1,
+           last_name == "Texeira" ~ 1,
+           last_name == "Johnson" & first_name == "Eddie" ~ 1,
+           last_name == "Boniek Garcia" ~ 1,
+           last_name == "Barnes" & first_name == "Giles" ~ 1,
+           last_name == "Lopez" & first_name == "Alexander" ~ 1,
+           last_name == "Beasley" ~ 1,
+           last_name == "Bieler" & first_name == "Claudio" ~ 1,
+           last_name == "Besler" ~ 1,
+           last_name == "Zusi" ~ 1,
+           last_name == "Donovan" & first_name == "Landon" ~ 1,
+           last_name == "Keane" & first_name == "Robbie" ~ 1,
+           last_name == "Gonzalez" & first_name == "Omar" ~ 1,
+           last_name == "Di Vaio" & first_name == "Marco" ~ 1,
+           last_name == "Bernardello" & first_name == "Hernan" ~ 1,
+           last_name == "Piatti" ~ 1,
+           last_name == "Bengtson" & first_name == "Jerry" ~ 1,
+           last_name == "Jones" & first_name == "Jermaine" ~ 1,
+           last_name == "Villa" & first_name == "David" ~ 1,
+           last_name == "Henry" & first_name == "Thierry" ~ 1,
+           last_name == "Cahill" ~ 1,
+           last_name == "Kaka" ~ 1,
+           last_name == "Maidana" ~ 1,
+           last_name == "Edu" & first_name == "Maurice" ~ 1,
+           last_name == "Valeri" ~ 1,
+           last_name == "Adi" ~ 1,
+           last_name == "Ridgewell" ~ 1,
+           last_name == "Saborio" ~ 1,
+           last_name == "Morales" & first_name == "Javier" ~ 1,
+           last_name == "Jaime" ~ 1,
+           last_name == "Perez" & first_name == "Matias" ~ 1,
+           last_name == "Wondolowski" ~ 1,
+           last_name == "Rosales" & first_name == "Mauro" ~ 1,
+           last_name == "Obafemi" ~ 1,
+           last_name == "Dempsey" & first_name == "Clint" ~ 1,
+           last_name == "Alonso" ~ 1,
+           first_name == "Gilberto" ~ 1,
+           last_name == "Bradley" ~ 1,
+           last_name == "Defoe" ~ 1,
+           last_name == "Laba" ~ 1,
+           last_name == "Miller" & first_name == "Kenny" ~ 1,
+           last_name == "Morales" & first_name == "Pedro" ~ 1,
+           TRUE ~ 0)) %>%
+    # filtering out teams for balanced panel
+  filter(club == "CHI" | 
+         club == "COL" | 
+         club == "CLB" | 
+         club == "DAL" | 
+         club == "DC" | 
+         club == "KC" | 
+         club == "LA" |
+         club == "NE" |
+         club == "NY") %>%
+  # recode team abbreviations for teams in panel
+  mutate(club = case_match(club,
+                    "CLB" ~ "CLB",
+                    "CHI" ~ "CHI", 
+                    "COL" ~ "COL",
+                    "DAL" ~ "DAL",
+                    "DC" ~ "DC",
+                    "KC" ~ "KC",
+                    "LA" ~ "LA",
+                    "NY" ~ "NYR",
+                    "NE" ~ "NE"))
+
+# summary table
+st(salary2014)
+
+# boxplot by team
+salary2014 %>%
+  group_by(club) %>%
+  ggplot(aes(x = club, y = base_salary)) +
+  geom_boxplot() +
+  scale_y_continuous(breaks = seq(0, 6000000, by = 1000000))
+```
+Here are the summary salary statistics for 2014. 
+
+```{r, echo = FALSE}
+# import sheet
+salary2015 <- read.csv("mls-salaries-2015.csv")
+
+# summary stats on console
+salary2015 %>%
+  sapply(summary)
+
+# filter and clean data
+salary2015 <- salary2015 %>%
+  # add new variables for analysis
+  mutate(year = "2015", 
+         DP = case_when(
+           first_name == "Gilberto" ~ 1,
+           last_name == "Accam" ~ 1,
+           last_name == "Maloney" ~ 1,
+           last_name == "Igboananike" ~ 1,
+           last_name == "Torres" & first_name == "Gabriel" ~ 1,
+           last_name == "Ramirez" ~ 1,
+           last_name == "Doyle" & first_name == "Kevin" ~ 1,
+           last_name == "Higuain" ~ 1,
+           last_name == "Castillo" ~ 1,
+           last_name == "Diaz" ~ 1,
+           last_name == "Texeira" ~ 1,
+           last_name == "Johnson" & first_name == "Eddie" ~ 1,
+           last_name == "Espindola" ~ 1,
+           last_name == "Barnes" & first_name == "Giles" ~ 1,
+           last_name == "Beasley" ~ 1,
+           last_name == "Manotas" ~ 1,
+           last_name == "Torres" & first_name == "Erick" ~ 1,
+           last_name == "Besler" ~ 1,
+           last_name == "Zusi" ~ 1,
+           last_name == "Espinoza" ~ 1,
+           last_name == "Keane" & first_name == "Robbie" ~ 1,
+           last_name == "Gonzalez" & first_name == "Omar" ~ 1,
+           last_name == "Gerrard" ~ 1,
+           last_name == "Dos Santos" ~ 1,
+           last_name == "Drogba" ~ 1,
+           last_name == "Jones" & first_name == "Jermaine" ~ 1,
+           last_name == "Villa" & first_name == "David" ~ 1,
+           last_name == "Lampard" ~ 1,
+           last_name == "Pirlo" ~ 1,
+           last_name == "Wright-Phillips" & first_name == "Bradley" ~ 1,
+           last_name == "Veron" ~ 1,
+           last_name == "Rivas" ~ 1,
+           last_name == "Rochez" ~ 1,
+           last_name == "Kaka" ~ 1,
+           last_name == "Maidana" ~ 1,
+           last_name == "Edu" & first_name == "Maurice" ~ 1,
+           last_name == "Aristeguieta" ~ 1,
+           last_name == "Valeri" ~ 1,
+           last_name == "Adi" ~ 1,
+           last_name == "Ridgewell" ~ 1,
+           last_name == "Melano" ~ 1,
+           last_name == "Saborio" ~ 1,
+           last_name == "Morales" & first_name == "Javier" ~ 1,
+           last_name == "Jaime" ~ 1,
+           last_name == "Beckerman" ~ 1,
+           last_name == "Martinez" ~ 1,
+           last_name == "Perez" & first_name == "Matias" ~ 1,
+           last_name == "Wondolowski" ~ 1,
+           last_name == "Emeghara" ~ 1,
+           last_name == "Rosales" & first_name == "Mauro" ~ 1,
+           last_name == "Obafemi" ~ 1,
+           last_name == "Dempsey" & first_name == "Clint" ~ 1,
+           last_name == "Alonso" ~ 1,
+           last_name == "Valdez" ~ 1,
+           last_name == "Bradley" ~ 1,
+           last_name == "Defoe" ~ 1,
+           last_name == "Giovinco" ~ 1,
+           last_name == "Altidore" ~ 1,
+           last_name == "Laba" ~ 1,
+           last_name == "Morales" & first_name == "Pedro" ~ 1,
+           last_name == "Rivero" ~ 1,
+           TRUE ~ 0)) %>%
+    # filtering out teams for balanced panel
+  filter(club == "CHI" | 
+         club == "COL" | 
+         club == "CLB" | 
+         club == "DAL" | 
+         club == "DC" | 
+         club == "KC" | 
+         club == "LA" |
+         club == "NE" |
+         club == "NY") %>%
+  # recode team abbreviations for teams in panel
+  mutate(club = case_match(club,
+                    "CLB" ~ "CLB",
+                    "CHI" ~ "CHI", 
+                    "COL" ~ "COL",
+                    "DAL" ~ "DAL",
+                    "DC" ~ "DC",
+                    "KC" ~ "KC",
+                    "LA" ~ "LA",
+                    "NY" ~ "NYR",
+                    "NE" ~ "NE"))
+
+# summary table
+st(salary2015)
+
+# boxplot by team
+salary2015 %>%
+  group_by(club) %>%
+  ggplot(aes(x = club, y = base_salary)) +
+  geom_boxplot() +
+  scale_y_continuous(breaks = seq(0, 6000000, by = 1000000))
+```
+Here are the summary salary statistics for 2015. 
+
+```{r, echo = FALSE}
+# import sheet
+salary2016 <- read.csv("mls-salaries-2016.csv")
+
+# summary stats on console
+salary2016 %>%
+  sapply(summary)
+
+# filter and clean data
+salary2016 <- salary2016 %>%
+  # add new variables for analysis
+  mutate(year = "2016", 
+         DP = case_when(
+           first_name == "Gilberto" ~ 1,
+           last_name == "Accam" ~ 1,
+           last_name == "Igboananike" ~ 1,
+           last_name == "Ramirez" ~ 1,
+           last_name == "Doyle" & first_name == "Kevin" ~ 1,
+           last_name == "Gashi" ~ 1,
+           last_name == "Howard" ~ 1,
+           last_name == "Higuain" ~ 1,
+           last_name == "Kamara" & first_name == "Kei" ~ 1,
+           last_name == "Diaz" ~ 1,
+           last_name == "Gruezo" ~ 1,
+           last_name == "Espindola" ~ 1,
+           last_name == "Barnes" & first_name == "Giles" ~ 1,
+           last_name == "Beasley" ~ 1,
+           last_name == "Manotas" ~ 1,
+           last_name == "Torres" & first_name == "Erick" ~ 1,
+           last_name == "Besler" ~ 1,
+           last_name == "Zusi" ~ 1,
+           last_name == "Espinoza" ~ 1,
+           last_name == "Rubio Kostner" ~ 1,
+           last_name == "Keane" & first_name == "Robbie" ~ 1,
+           last_name == "Gerrard" ~ 1,
+           last_name == "Dos Santos" ~ 1,
+           last_name == "Van Damme" ~ 1,
+           last_name == "Drogba" ~ 1,
+           last_name == "Ontivero" ~ 1,
+           last_name == "Goncalves" ~ 1,
+           last_name == "Kouassi" ~ 1,
+           last_name == "Kamara" ~ 1,
+           last_name == "Villa" & first_name == "David" ~ 1,
+           last_name == "Lampard" ~ 1,
+           last_name == "Pirlo" ~ 1,
+           last_name == "Wright-Phillips" & first_name == "Bradley" ~ 1,
+           last_name == "Veron" ~ 1,
+           last_name == "Kljestan" ~ 1,
+           last_name == "Damari" ~ 1,
+           last_name == "Rivas" ~ 1,
+           last_name == "Rochez" ~ 1,
+           last_name == "Perez Garcia" ~ 1,
+           last_name == "Kaka" ~ 1,
+           last_name == "Edu" & first_name == "Maurice" ~ 1,
+           last_name == "Bedoya" ~ 1,
+           last_name == "Valeri" ~ 1,
+           last_name == "Adi" ~ 1,
+           last_name == "Ridgewell" ~ 1,
+           last_name == "Melano" ~ 1,
+           last_name == "Plata" ~ 1,
+           last_name == "Martinez" ~ 1,
+           last_name == "Movsisyan" ~ 1,
+           last_name == "Perez" & first_name == "Matias" ~ 1,
+           last_name == "Wondolowski" ~ 1,
+           last_name == "Emeghara" ~ 1,
+           last_name == "Dawkins" ~ 1,
+           last_name == "Dempsey" & first_name == "Clint" ~ 1,
+           last_name == "Alonso" ~ 1,
+           last_name == "Valdez" ~ 1,
+           last_name == "Bradley" ~ 1,
+           last_name == "Giovinco" ~ 1,
+           last_name == "Altidore" ~ 1,
+           last_name == "Laba" ~ 1,
+           last_name == "Morales" & first_name == "Pedro" ~ 1,
+           last_name == "Rivero" ~ 1,
+           TRUE ~ 0)) %>%
+    # filtering out teams for balanced panel
+  filter(club == "CHI" | 
+         club == "COL" | 
+         club == "CLB" | 
+         club == "DAL" | 
+         club == "DC" | 
+         club == "KC" | 
+         club == "LA" |
+         club == "NE" |
+         club == "NYRB") %>%
+  # recode team abbreviations for teams in panel
+  mutate(club = case_match(club,
+                    "CLB" ~ "CLB",
+                    "CHI" ~ "CHI", 
+                    "COL" ~ "COL",
+                    "DAL" ~ "DAL",
+                    "DC" ~ "DC",
+                    "KC" ~ "KC",
+                    "LA" ~ "LA",
+                    "NYRB" ~ "NYR",
+                    "NE" ~ "NE"))
+
+# summary table
+st(salary2016)
+
+# boxplot by team
+salary2016 %>%
+  group_by(club) %>%
+  ggplot(aes(x = club, y = base_salary)) +
+  geom_boxplot() +
+  scale_y_continuous(breaks = seq(0, 6000000, by = 1000000))
+```
+Here are the summary salary statistics for 2016. 
+
+```{r, echo = FALSE}
+# import sheet
+salary2017 <- read.csv("mls-salaries-2017.csv")
+
+# summary stats on console
+salary2017 %>%
+  sapply(summary)
+
+# cleaning data
+salary2017 <- salary2017 %>%
+  # put new variables for matching later
+  mutate(year = "2017", 
+         # hardcoding DPs
+         DP = case_when(
+           last_name == "Villalba" ~ 1,
+           last_name == "Almiron" ~ 1,
+           last_name == "Martinez" & first_name == "Josef" ~ 1,
+           last_name == "Accam" ~ 1,
+           last_name == "Nikolic" ~ 1,
+           last_name == "Schweinsteiger" ~ 1,
+           last_name == "Ramirez" & first_name == "Juan Edgardo" ~ 1,
+           last_name == "Gashi" ~ 1,
+           last_name == "Howard" ~ 1,
+           last_name == "Higuain" ~ 1,
+           last_name == "Mensah" ~ 1,
+           last_name == "Santos" ~ 1,
+           last_name == "Gruezo" ~ 1,
+           last_name == "Chala" ~ 1,
+           last_name == "Colman" ~ 1,
+           last_name == "Arriola" ~ 1,
+           last_name == "Torres" & first_name == "Erick" ~ 1,
+           last_name == "Elis" ~ 1,
+           last_name == "Zusi" ~ 1,
+           last_name == "Espinoza" ~ 1,
+           first_name == "Gerso" ~ 1,
+           last_name == "Dos Santos" ~ 1,
+           last_name == "Van Damme" ~ 1,
+           last_name == "Alessandrini" ~ 1,
+           last_name == "Dzemaili" ~ 1,
+           last_name == "Kouassi" ~ 1,
+           last_name == "Kamara" ~ 1,
+           last_name == "Villa" & first_name == "David" ~ 1,
+           last_name == "Pirlo" ~ 1,
+           last_name == "Moralez" ~ 1,
+           last_name == "Wright-Phillips" & first_name == "Bradley" ~ 1,
+           last_name == "Veron" ~ 1,
+           last_name == "Kljestan" ~ 1,
+           last_name == "Rivas" ~ 1,
+           last_name == "Perez Garcia" ~ 1,
+           last_name == "Kaka" ~ 1,
+           last_name == "Barnes" ~ 1,
+           last_name == "Yotun" ~ 1,
+           last_name == "Edu" & first_name == "Maurice" ~ 1,
+           last_name == "Bedoya" ~ 1,
+           last_name == "Valeri" ~ 1,
+           last_name == "Adi" ~ 1,
+           last_name == "Blanco" ~ 1,
+           last_name == "Plata" ~ 1,
+           last_name == "Martinez" ~ 1,
+           last_name == "Movsisyan" ~ 1,
+           last_name == "Rusnak" ~ 1,
+           last_name == "Savarino" ~ 1,
+           last_name == "Wondolowski" ~ 1,
+           last_name == "Dawkins" ~ 1,
+           last_name == "Qazaishvili" ~ 1,
+           last_name == "Dempsey" & first_name == "Clint" ~ 1,
+           last_name == "Alonso" ~ 1,
+           last_name == "Lodeiro" ~ 1,
+           last_name == "Bradley" ~ 1,
+           last_name == "Giovinco" ~ 1,
+           last_name == "Altidore" ~ 1,
+           last_name == "Montero" ~ 1,
+           last_name == "Laba" ~ 1,
+           last_name == "Shea" ~ 1,
+           TRUE ~ 0)) %>%
+    # filtering out teams for balanced panel
+  filter(club == "CHI" | 
+         club == "COL" | 
+         club == "CLB" | 
+         club == "DAL" | 
+         club == "DC" | 
+         club == "KC" | 
+         club == "LA" |
+         club == "NE" |
+         club == "NYRB") %>%
+  # recode team abbreviations for teams in panel
+  mutate(club = case_match(club,
+                    "CLB" ~ "CLB",
+                    "CHI" ~ "CHI", 
+                    "COL" ~ "COL",
+                    "DAL" ~ "DAL",
+                    "DC" ~ "DC",
+                    "KC" ~ "KC",
+                    "LA" ~ "LA",
+                    "NYRB" ~ "NYR",
+                    "NE" ~ "NE"))
+
+# summary table
+st(salary2017)
+
+# boxplot by team
+salary2017 %>%
+  group_by(club) %>%
+  ggplot(aes(x = club, y = base_salary)) +
+  geom_boxplot() +
+  scale_y_continuous(breaks = seq(0, 6000000, by = 1000000))
+
+```
+Here are the summary salary statistics for 2017. 
+
+# Summary Statistics for Empirical Paper
+```{r, echo = FALSE}
+
+# get all the salary data by years in one sheet
+allyears <- rbind(salary2004, salary2005, salary2006, salary2007, salary2008, salary2009, salary2010, salary2011, salary2012, salary2013, salary2014, salary2015, salary2016, salary2017)
+
+# report mean salary by year
+allyears %>%
+  group_by(year) %>%
+  summarise(Mean = mean(base_salary, na.rm = T))
+
+# summary table for salary data in all years
+st(allyears)  
+
+# pre-DP summary table for salary data
+allyears %>%
+  filter(year < 2007) %>%
+  st()
+
+# post-DP summary table for salary data
+allyears %>%
+  filter(year > 2006) %>%
+  st()
+
+# standard deviation post-DP rule
+allyears %>%
+  filter(year >= 2007) %>%
+  summarise(sd = sd(guaranteed_compensation, na.rm = T))
+
+allyears %>%
+  group_by(year) %>%
+  summarise(Mean = mean(base_salary, na.rm = T))
+
+# scatterplot of mean salary over time
+allyears %>%
+  group_by(year) %>%
+  mutate(Mean = mean(base_salary, na.rm = T)) %>%
+  ggplot(aes(x = year, y = Mean, group = 1)) +
+    geom_line(size = 1) + 
+    geom_point(size = 2) +
+    labs(x = "Year", 
+        y = "Mean Salary") +
+    scale_y_continuous(labels = dollar) +
+    theme_pubr()
+
+allyears %>%
+  ggplot(aes(x = DP, y = base_salary)) +
+  geom_violin() +
+  theme_pubr()
+
+# graph of standard deviation of salary over time
+allyears %>%
+  group_by(year) %>%
+  mutate(SD = sd(base_salary, na.rm = T)) %>%
+  ggplot(aes(x = year, y = SD, group = 1)) +
+    geom_line(size = 1) + 
+    geom_point(size = 2) +
+    labs(x = "Year", 
+        y = "Standard Deviation of Salary") +
+    scale_y_continuous(labels = dollar) +
+    theme_pubr()
+
+# scatterplot of dispersion measure by year for teams in panel
+allyears %>%
+  group_by(year) %>%
+  mutate(dispersion_measure = max(base_salary) - median(base_salary)) %>%
+  ggplot(aes(x = year, y = dispersion_measure, group = 1)) +
+    geom_line(size = 1) + 
+    geom_point(size = 2) +
+    labs(x = "Year", 
+        y = "Standard Deviation of Salary") +
+    scale_y_continuous(labels = dollar) +
+    theme_pubr()
+
+allyears %>%
+  group_by(year) %>%
+  summarize(dispersion_measure = max(base_salary) - median(base_salary))
+
+# graph of position breakdown of DPs
+allyears %>%
+  filter(DP == 1) %>%
+  ggplot(aes(x = year, fill = position)) +
+  geom_bar() + 
+  labs(x = "Year", 
+       y = "Number of Players", 
+       fill = "Position") +
+  theme_pubr()
+
+# violin plot of base salary
+allyears %>%
+  group_by(year) %>%
+  ggplot(aes(x=year, y= base_salary, fill=year, group = year)) +
+  geom_violin() +
+  labs(x = "Year", 
+       y = "Base Salary",
+       title = "Average MLS Salary Year by Year") +
+  scale_y_continuous(labels = dollar) +
+  theme_pubr() +
+  theme(legend.position = "none")
+
+# violin plot of guaranteed compensation
+allyears %>%
+  group_by(year) %>%
+  ggplot(aes(x=year, y= guaranteed_compensation, fill=year, group = year)) +
+  geom_violin() +
+  geom_boxplot() +
+  labs(x = "Year", 
+       y = "Guaranteed Compensation") +
+  scale_y_continuous(labels = dollar) +
+  theme_pubr() +
+  theme(legend.position = "none")
+
+# count of DPs by position
+allyears %>%
+  filter(DP == 1) %>%
+  count(position)
+  
+allyears %>%
+  filter(DP == 1) %>%
+  count()
+
+n_distinct(allyears)
+```
+
+## Cleaning Up Population Data (Proxy for Market Size)
+
+```{r, echo = FALSE}
+# import census and estimates sheets
+census_and_estimates_2000s <- read.csv("sub-est00int.csv")
+census_and_estimates_2010s <- read.csv("SUB-IP-EST2019-ANNRNK.csv")
+
+# filtering 2000 census data
+census_and_estimates_2000s <- census_and_estimates_2000s %>%
+  # filter for cities with MLS panel teams
+  filter(NAME == "Chicago city" & STNAME == "Illinois" |
+         NAME == "Columbus city" & STNAME == "Ohio" |
+         NAME == "Denver city" & STNAME == "Colorado" | 
+         NAME == "Dallas city" & STNAME == "Texas" |
+         NAME == "Washington city" & STNAME == "District of Columbia" |
+         NAME == "Kansas City city" & STNAME == "Missouri" |
+         NAME == "Los Angeles city" & STNAME == "California" |
+         NAME == "Boston city" & STNAME == "Massachusetts" |
+         NAME == "New York city" & STNAME == "New York") %>%
+  # removes extra observations
+  filter(SUMLEV == 162) %>%
+  # get rid of 'city' from all city observations
+  mutate(NAME = as.character(gsub('city', '', NAME))) %>%
+  # select relevant columns
+  select(c(NAME, ESTIMATESBASE2000, POPESTIMATE2001:CENSUS2010POP)) %>%
+  # make dataset longer
+  pivot_longer(cols = ESTIMATESBASE2000:CENSUS2010POP, 
+               names_to = "year", 
+               values_to = "population") %>%
+  # stirp whitespace from character values
+  mutate_if(is.character, str_trim) %>%
+  # recode city names to match team abbreviations for teams in panel
+  mutate(city = case_match(NAME,
+                    "Los Angeles" ~ "LA", 
+                    "Denver" ~ "COL", 
+                    "Washington" ~ "DC", 
+                    "Chicago" ~ "CHI", 
+                    "Boston" ~ "NE", 
+                    "Kansas City" ~ "KC", 
+                    "New York" ~ "NYR", 
+                    "Columbus" ~ "CLB", 
+                    "Dallas" ~ "DAL")) %>%
+  # drop NAME vector so I don't get confused
+  select(c(-NAME)) %>%
+  # recode previous vector names to match years
+  mutate(year = case_match(year,
+                    "ESTIMATESBASE2000" ~ 2000, 
+                    "POPESTIMATE2001" ~ 2001, 
+                    "POPESTIMATE2002" ~ 2002,
+                    "POPESTIMATE2003" ~ 2003,
+                    "POPESTIMATE2004" ~ 2004,
+                    "POPESTIMATE2005" ~ 2005,
+                    "POPESTIMATE2006" ~ 2006,
+                    "POPESTIMATE2007" ~ 2007,
+                    "POPESTIMATE2008" ~ 2008,
+                    "POPESTIMATE2009" ~ 2009,
+                    "CENSUS2010POP" ~ 2010)) %>%
+  # reorder columns to be interpretable
+  select(, 3, 1, 2) %>%
+  # keep only relevant years
+  filter(year > 2003)
+
+# filtering and cleaning 2010s population data
+census_and_estimates_2010s <- census_and_estimates_2010s %>%
+  # rename columns to format cleaner
+  rename(rank = table.with.row.headers.in.column.B.and.column.headers.in.rows.3.through.4,
+         geographic_area = X,
+         census_2010 = X.1,
+         estimates_base_2010 = X.2,
+         pop_2010 = X.3,
+         pop_2011 = X.4,
+         pop_2012 = X.5,
+         pop_2013 = X.6,
+         pop_2014 = X.7,
+         pop_2015 = X.8,
+         pop_2016 = X.9,
+         pop_2017 = X.10,
+         pop_2018 = X.11,
+         pop_2019 = X.12) %>%
+  # remove first three rows, which were old headers in csv file
+  tail(-3) %>%
+  # add new variables for rowbinds later
+  mutate(census_2010 = as.numeric(gsub('[$,]', '', census_2010)), 
+         estimates_base_2010 = as.numeric(gsub('[$,]', '', estimates_base_2010)), 
+         pop_2010 = as.numeric(gsub('[$,]', '', pop_2010)), 
+         pop_2011 = as.numeric(gsub('[$,]', '', pop_2011)),
+         pop_2012 = as.numeric(gsub('[$,]', '', pop_2012)),
+         pop_2013 = as.numeric(gsub('[$,]', '', pop_2013)),
+         pop_2014 = as.numeric(gsub('[$,]', '', pop_2014)),
+         pop_2015 = as.numeric(gsub('[$,]', '', pop_2015)),
+         pop_2016 = as.numeric(gsub('[$,]', '', pop_2016)),
+         pop_2017 = as.numeric(gsub('[$,]', '', pop_2017)),
+         pop_2018 = as.numeric(gsub('[$,]', '', pop_2018)),
+         pop_2019 = as.numeric(gsub('[$,]', '', pop_2010))) %>%
+  # separate Player columns into first and last names
+  separate(col = "geographic_area", c("city", "state"), sep = ",") %>%
+    # remove whitespaces
+  mutate_if(is.character, str_trim) %>%
+  # filter out for teams in panel
+  filter(city == "Chicago city" & state == "Illinois" |
+         city == "Columbus city" & state == "Ohio" |
+         city == "Denver city" & state == "Colorado" | 
+         city == "Dallas city" & state == "Texas" |
+         city == "Washington city" & state == "District of Columbia" |
+         city == "Kansas City city" & state == "Missouri" |
+         city == "Los Angeles city" & state == "California" |
+         city == "Boston city" & state == "Massachusetts" |
+         city == "New York city" & state == "New York") %>%
+  # get rid of 'city' from all city observations
+  mutate(city = as.character(gsub('city', '', city))) %>%
+    # remove whitespaces
+  mutate_if(is.character, str_trim) %>%
+  # select relevant columns
+  select(c(city, pop_2011:pop_2017)) %>%
+  # make dataset longer
+  pivot_longer(cols = pop_2011:pop_2017, 
+               names_to = "year", 
+               values_to = "population") %>%
+  # recode city names to match team abbreviations for teams in panel
+  mutate(city = case_match(city,
+                    "Los Angeles" ~ "LA", 
+                    "Denver" ~ "COL", 
+                    "Washington" ~ "DC", 
+                    "Chicago" ~ "CHI", 
+                    "Boston" ~ "NE", 
+                    "Kansas City" ~ "KC", 
+                    "New York" ~ "NYR", 
+                    "Columbus" ~ "CLB", 
+                    "Dallas" ~ "DAL")) %>%
+  # recode previous vector names to match years
+  mutate(year = case_match(year,
+                    "pop_2011" ~ 2011, 
+                    "pop_2012" ~ 2012,
+                    "pop_2013" ~ 2013,
+                    "pop_2014" ~ 2014,
+                    "pop_2015" ~ 2015,
+                    "pop_2016" ~ 2016,
+                    "pop_2017" ~ 2017))
+
+# combine population data into one dataset
+pop_data <- rbind(census_and_estimates_2000s, census_and_estimates_2010s)
+```
+
+# Effect of Designated Players on Team Performance
+```{r, echo = FALSE}
+# make sheet keeping tracks of number of DP players on team in given year
+DP_tracker <- allyears %>%
+  mutate_at(c(6), as.numeric) %>%
+  group_by(club, year) %>%
+  summarise(num_DP = sum(DP))
+
+# graph of number of DP players by year
+DP_tracker %>%
+  group_by(year) %>%
+  ggplot(aes(x = year, y = num_DP)) +
+           geom_bar(stat = "identity") +
+           labs(x = "Year", 
+                y = "Number of Designated Players") +
+  theme_pubr()
+
+# graph of number of DP players by year and club
+DP_tracker %>%
+  group_by(year) %>%
+  ggplot(aes(x = year, y = num_DP)) +
+           geom_bar(stat = "identity") +
+           facet_wrap(~club) +
+           labs(x = "Year", 
+                y = "Number of Designated Players") +
+  theme_pubr() 
+
+# join team overall standings with info on number of DP players on team in season
+team_performance_data <- left_join(standings, DP_tracker, by = c("Team" = "club", "Year" = "year"))
+
+# join team overall standings with population data
+team_performance_data <- left_join(team_performance_data, pop_data, by = c("Team" = "city", "Year" = "year"))
+
+# summary stats on console
+team_performance_data %>%
+  summarise(mean_points = mean(Pts, na.rm = T),
+            avg_pos = mean(Pos, na.rm = T))
+
+# lag league position in previous year (Pos) for analysis and scale population per 100,000 ppl
+team_performance_data <- team_performance_data %>%
+  group_by(Team) %>%
+  mutate(prev_Pos = lag(Pos, 1), 
+         population = population / 100000)
+
+# regression of number of DP on overall team performance
+q2_partA <- lm(Pts ~ num_DP + prev_Pos + population, team_performance_data)
+summary(q2_partA)
+
+# regression of number of DP on team performance on per game basis
+q2_partB <- lm(ppg ~ num_DP + prev_Pos + population, team_performance_data)
+summary(q2_partB)
+
+stargazer(q2_partA, q2_partB)
+```
+
+## Effect of Presence of DP Players on Performance by Position 
+
+```{r, echo = FALSE}
+# turn year variable to numeric
+allyears <- allyears %>%
+  mutate_at(c(6), as.numeric)
+
+# add number of DP players on team
+individual_performance_data <- left_join(allyears, DP_tracker, by = c("club", "year"))
+
+# add population data
+individual_performance_data <- left_join(individual_performance_data, pop_data, by = c("club" = "city", "year"))
+
+# add outfield players data
+individual_performance_data <- left_join(individual_performance_data, players, by = c("club" = "Club", "year" = "Year", "last_name", "first_name"))
+
+# add goalkeeper  data
+individual_performance_data <- left_join(individual_performance_data, goalkeepers, by = c("club" = "Club", "year" = "Year", "last_name", "first_name"))
+
+# separate all forwards
+forward_data <- individual_performance_data %>%
+  filter(position == "D-F" | 
+         position == "F-D" | 
+         position == "F" | 
+         position == "M-F" | 
+         position == "F-M" | 
+         position == "M/F" | 
+         position == "MF")
+
+# regression of number of DP's on performance of forwards
+q3forward <- lm(G.90min ~ num_DP + DP + A.90min + population, forward_data)
+summary(q3forward)
+  
+# separate all midfielders
+midfielder_data <- individual_performance_data %>%
+  filter(position == "D-M" | 
+         position == "M-D" | position == "M/D" | position == "M" | 
+           position == "M-F" | position == "F-M" | position == "M/F" | position == "MF")
+
+# regression of number of DP's on performance of midfielders
+q3midfielder <- lm(A.90min ~ num_DP + DP + G.90min + population, midfielder_data)
+summary(q3midfielder)
+
+# separate all midfielders
+defender_data <- individual_performance_data %>%
+  filter(position == "D" | position == "D-M" | position == "D-F" | position == "F-D" |
+          position == "D-M" | position == "M-D" | position == "M/D")
+
+# regression of number of DP's on performance of midfielders
+q3defender <- lm(YC ~ num_DP + DP + RC + population, defender_data)
+summary(q3defender)
+
+# separate all goalies
+goalkeeper_data <- individual_performance_data %>%
+  filter(position == "GK")
+
+# regression of number of DP's on performance of goalies
+q3goalie <- lm(GAA ~ num_DP + DP + Sv. + population, goalkeeper_data)
+summary(q3goalie)
+
+stargazer(q3forward, q3midfielder, q3defender, q3goalie)
+
+individual_performance_data %>%
+  filter(year > 2006) %>%
+  filter(position != "GK") %>%
+  group_by(DP) %>%
+  summarize(sumDPGoals = sum(G))
+```
+
+## Effect of Presence of DP Players on Future Salary Outcomes 
+
+```{r, echo = FALSE}
+# join salary data with population data
+salary_outcome_data <- left_join(allyears, pop_data, by = c("club" = "city", "year" = "year"))
+
+salary_outcome_data <- left_join(salary_outcome_data, DP_tracker, by = c("club", "year"))
+
+# filtering and cleaning for analysis
+salary_outcome_data <- salary_outcome_data %>%
+  group_by(last_name, first_name) %>%
+  # create 1-yr and 3-yr lags for monetary variables
+  mutate(prev_salary_after_one = lag(base_salary, 1),
+         prev_salary_after_three = lag(base_salary, 3),
+         prev_comp_after_one = lag(guaranteed_compensation, 1),
+         prev_comp_after_three = lag(guaranteed_compensation, 3)) %>%
+  # create monetary growth variables
+  mutate(one_yr_base_growth = (base_salary - prev_salary_after_one)/prev_salary_after_one,
+         three_yr_base_growth = (base_salary - prev_salary_after_three)/prev_salary_after_three,
+         one_yr_comp_growth = (guaranteed_compensation - prev_comp_after_one)/prev_comp_after_one,
+         three_yr_comp_growth = (guaranteed_compensation - prev_comp_after_three)/prev_comp_after_three)
+
+# regression of number of DP on salary outcomes (1-yr base growth)
+q4_partAi <- lm(one_yr_base_growth ~ num_DP + DP + population, salary_outcome_data)
+summary(q4_partAi)
+
+# regression of number of DP on salary outcomes (3-yr base growth)
+q4_partAii <- lm(three_yr_base_growth ~ num_DP + DP + population, salary_outcome_data)
+summary(q4_partAii)
+
+# regression of number of DP on salary outcomes (1-yr compensation growth)
+q4_partBi <- lm(one_yr_comp_growth ~ num_DP + DP + population, salary_outcome_data)
+summary(q4_partBi)
+
+# regression of number of DP on salary outcomes (3-yr compensation growth)
+q4_partBii <- lm(three_yr_comp_growth ~ num_DP + DP + population, salary_outcome_data)
+summary(q4_partBii)
+
+stargazer(q4_partAi, q4_partAii, q4_partBi, q4_partBii)
+```
+
+## Analysis Chapter 2
+
+```{r, echo = FALSE}
+team_performance_data <- team_performance_data %>%
+  mutate(treated = ifelse(Team == "NYR" | Team == "CHI" | Team == "DAL" | Team == "LA", 1, 0))
+
+thingtodo <- team_performance_data %>%
+  group_by(Year, treated) %>%
+  summarize(avg_DP = mean(num_DP, na.rm = T))
+
+ggplot(thingtodo, aes(x = Year,
+                     y = avg_DP, 
+                     group = treated, 
+                     color = treated)) +
+  geom_point(size = 3) +
+  geom_line(size = 1) +
+  labs(y = "Number of DPs", 
+       color = "Presence of DP") +
+  theme_pubr()
+
+
+teamplotdata <- team_performance_data %>%
+  group_by(Year, treated) %>%
+  summarize(n = n(),
+            mean = mean(Pts),
+            sd = sd(Pts),
+            se = sd/sqrt(n))
+
+# plot diff in mean total points by year
+ggplot(teamplotdata, aes(x = Year,
+                     y = mean, 
+                     group=treated, 
+                     color=treated)) +
+  geom_point(size = 3) +
+  geom_line(size = 1) +
+  labs(y = "League Points Total", 
+       color = "Presence of DP") +
+  theme_pubr()
+
+teamplotdata2 <- team_performance_data %>%
+  group_by(Year, treated) %>%
+  summarize(n = n(),
+            mean = mean(ppg),
+            sd = sd(ppg),
+            se = sd/sqrt(n))
+
+# plot diff in mean by year
+ggplot(teamplotdata2, aes(x = Year,
+                     y = mean, 
+                     group=treated, 
+                     color=treated)) +
+  geom_point(size = 3) +
+  geom_line(size = 1) +
+  labs(y = "Points per Game", 
+       color = "Presence of DP") +
+  theme_pubr()
+```
+
+```{r, echo = FALSE}
+individual_performance_data <- individual_performance_data %>%
+  mutate(treated = ifelse(club == "NYR" | club == "CHI" | club == "DAL" | club == "LA", 1, 0))
+
+
+plotdata <- individual_performance_data %>%
+  filter(DP == 0) %>%
+  group_by(year, treated) %>%
+  summarize(n = n(),
+            mean = mean(base_salary),
+            sd = sd(base_salary),
+            se = sd/sqrt(n))
+
+# plot the means and standard errors by sex
+ggplot(plotdata, aes(x = year,
+                     y = mean, 
+                     group=treated, 
+                     color=treated)) +
+  geom_point(size = 3) +
+  geom_line(size = 1) +
+  labs(y = "Base Salary", 
+       color = "Presence of DP") +
+  scale_y_continuous(labels = dollar) +
+  theme_pubr()
+
+plotdata2 <- individual_performance_data %>%
+  filter(DP == 0) %>%
+  group_by(year, treated) %>%
+  summarize(n = n(),
+            mean = mean(guaranteed_compensation),
+            sd = sd(guaranteed_compensation),
+            se = sd/sqrt(n))
+
+# plot the means and standard errors by sex
+ggplot(plotdata2, aes(x = year,
+                     y = mean, 
+                     group=treated, 
+                     color=treated)) +
+  geom_point(size = 3) +
+  geom_line(size = 1) +
+  labs(y = "Guaranteed Compensation", 
+       color = "Presence of DP") +
+  theme_pubr()
+
+plotdata3 <- individual_performance_data %>%
+  filter(DP == 0) %>%
+  filter(!is.na(G.90min)) %>%
+  group_by(year, treated) %>%
+  summarize(n = n(),
+            mean = mean(G.90min),
+            sd = sd(G.90min),
+            se = sd/sqrt(n))
+
+# plot the means and standard errors by sex
+ggplot(plotdata3, aes(x = year,
+                     y = mean, 
+                     group=treated, 
+                     color=treated)) +
+  geom_point(size = 3) +
+  geom_line(size = 1) +
+  labs(y = "Goals per 90 Minutes", 
+       color = "Presence of DP") +
+  theme_pubr()
+
+plotdata4 <- individual_performance_data %>%
+  filter(DP == 0) %>%
+  filter(!is.na(A.90min)) %>%
+  group_by(year, treated) %>%
+  summarize(n = n(),
+            mean = mean(A.90min),
+            sd = sd(A.90min),
+            se = sd/sqrt(n))
+
+# plot the means and standard errors by sex
+ggplot(plotdata4, aes(x = year,
+                     y = mean, 
+                     group=treated, 
+                     color=treated)) +
+  geom_point(size = 3) +
+  geom_line(size = 1) + 
+  labs(y = "Assists per 90 Minutes", 
+       color = "Presence of DP") +
+  scale_y_continuous(labels = dollar) +
+  theme_pubr()
+
+
+
+```
+# Regressions with Fixed Effects
+
+```{r, echo = FALSE}
+
+# fixed-effects
+fixed_effects_team_pts <- plm(Pts ~ num_DP + prev_Pos + population,
+                      data = team_performance_data,
+                      index = c("Team", "Year"), 
+                      model = "within", 
+                      effect = "twoways")
+
+summary(fixed_effects_team_pts)
+
+
+fixed_effects_team_ppg <- plm(ppg ~ num_DP + prev_Pos + population,
+                      data = team_performance_data,
+                      index = c("Team", "Year"), 
+                      model = "within", 
+                      effect = "twoways")
+
+fixed_effects_team_ppg
+
+stargazer(fixed_effects_team_pts, fixed_effects_team_ppg)
+```
+
+```{r, echo = FALSE}
+# export sets as csv
+# regression of number of DP's on performance of forwards
+q3forward_fe <- plm(G.90min ~ num_DP + DP + A.90min + population, 
+                    data = forward_data, 
+                    index = c("club", "year"), 
+                    model = "within", 
+                    effect = "twoways")
+summary(q3forward)
+
+# regression of number of DP's on performance of midfielders
+q3midfielder_fe <- plm(A.90min ~ num_DP + DP + G.90min + population,
+                       data = midfielder_data, 
+                      index = c("club", "year"), 
+                      model = "within", 
+                      effect = "twoways")
+summary(q3midfielder)
+
+# regression of number of DP's on performance of midfielders
+q3defender_fe <- plm(YC ~ num_DP + DP + RC + population, 
+                     data = defender_data, 
+                     index = c("club", "year"), 
+                     model = "within", 
+                     effect = "twoways")
+summary(q3defender)
+
+# regression of number of DP's on performance of goalies
+q3goalie_fe <- plm(GAA ~ num_DP + DP + Sv. + population, 
+                   data = goalkeeper_data, 
+                   index = c("club", "year"), 
+                   model = "within", 
+                   effect = "twoways")
+summary(q3goalie)
+
+stargazer(q3forward_fe, q3midfielder_fe, q3defender_fe, q3goalie_fe)
+```
+```{r, echo = FALSE}
+# regression of number of DP on salary outcomes (1-yr base growth)
+q4_partAi_fe <- plm(one_yr_base_growth ~ num_DP + DP + population, 
+                    data = salary_outcome_data, 
+                    index = c("club", "year"), 
+                    model = "within", 
+                    effect = "twoways")
+summary(q4_partAi)
+
+# regression of number of DP on salary outcomes (3-yr base growth)
+q4_partAii_fe <- plm(three_yr_base_growth ~ num_DP + DP + population, 
+                     data = salary_outcome_data,
+                     index = c("club", "year"), 
+                     model = "within", 
+                     effect = "twoways")
+summary(q4_partAii)
+
+# regression of number of DP on salary outcomes (1-yr compensation growth)
+q4_partBi_fe <- plm(one_yr_comp_growth ~ num_DP + DP + population, 
+                    data = salary_outcome_data, 
+                    index = c("club", "year"), 
+                   model = "within", 
+                   effect = "twoways")
+summary(q4_partBi)
+
+# regression of number of DP on salary outcomes (3-yr compensation growth)
+q4_partBii_fe <- plm(three_yr_comp_growth ~ num_DP + DP + population, 
+                     data = salary_outcome_data, 
+                     index = c("club", "year"), 
+                   model = "within", 
+                   effect = "twoways")
+summary(q4_partBii)
+
+stargazer(q4_partAi_fe, q4_partAii_fe, q4_partBi_fe, q4_partBii_fe)
+
+```
+
+# Appendix
+
+```{r, echo = FALSE}
+# export sets as csv
+write.csv(team_performance_data, "team performance data.csv")
+write.csv(individual_performance_data, "individual performance data.csv")
+write.csv(salary_outcome_data, "salary outcome data.csv")
+write.csv(defender_data, "defender data.csv")
+write.csv(forward_data, "forward data.csv")
+write.csv(midfielder_data, "midfielder data.csv")
+write.csv(goalkeeper_data, "goalkeeper data.csv")
+```
