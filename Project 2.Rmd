@@ -1,0 +1,348 @@
+---
+title: "Project 2"
+output:
+  html_document:
+    df_print: paged
+date: "2023-11-20"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+Given a dataset containing annual average concentrations of fine particulate matter (PM2.5) across the U.S. Environmental Protection Agency's monitoring network in the continental US, there are numerous predictions model that one can implement to predict ambient air pollution concentrations nationwide. For this project, I will be using the following models: linear regression, K-nearest neighbors via KKNN, and boosted trees via xgboost. 
+
+Linear regression, like its name implies, models a predictive relationship between a scalar response and one or more explanatory variables, which are measured without error. KNN regression is a non-parametric method that approximates the associates between independent variables and the continuous outcome by averaging the observations in the same neighborhood. Finally, boosted trees via xgboost uses boosting, which combines weak learners (usually decision trees with only one split) sequentially such that each new tree corrects the errors of the previous one. These trees are evaluated using a loss function, and we are trying to minimize the loss function. 
+
+```{r, echo = FALSE}
+library(tidyverse)
+library(tidymodels)
+library(factoextra)
+library(pROC)
+library(plotROC)
+library(cluster)
+library(rpart)
+library(rpart.plot)
+library(parsnip)
+library(kknn)
+library(ggplot2)
+library(broom)
+
+dat <- read_csv("https://github.com/rdpeng/stat322E_public/raw/main/data/pm25_data.csv.gz")
+```
+To choose the predictor variables to be used throughout all of the models, I used PCA analysis to determine the number of variables to include in the model. Below includes the summary of the PCA analysis to determine the cumulative variation that each loading contributes to the overall variation in the data. 
+
+```{r}
+pca <- dat %>%
+  select(-c(state, county, city)) %>%
+  scale() %>%
+  prcomp()
+
+dat_adj <- dat %>%
+  select(-c(state, county, city)) %>%
+  scale()
+  
+summary(prcomp(dat_adj))
+```
+
+Based off the PCA analysis, we can see that there are 12 components that explain 80% of the variability in the data. To determine which eight variables to include in each of the three models, I make plots of each of the PCA loadings to determine which variables to include in all of the models. 
+
+```{r}
+
+pca_result <- dat_adj %>%
+  data.matrix() %>%
+  prcomp()
+
+plot(pca_result)
+
+#PCA loadings for PC1-PC8
+as_tibble(pca_result$rotation, rownames = "variable") %>%
+  ggplot(aes(variable, PC1)) +
+  geom_point() +
+  coord_flip()
+
+as_tibble(pca_result$rotation, rownames = "variable") %>%
+  ggplot(aes(variable, PC2)) +
+  geom_point() +
+  coord_flip()
+
+as_tibble(pca_result$rotation, rownames = "variable") %>%
+  ggplot(aes(variable, PC3)) +
+  geom_point() +
+  coord_flip()
+
+as_tibble(pca_result$rotation, rownames = "variable") %>%
+  ggplot(aes(variable, PC4)) +
+  geom_point() +
+  coord_flip()
+
+as_tibble(pca_result$rotation, rownames = "variable") %>%
+  ggplot(aes(variable, PC5)) +
+  geom_point() +
+  coord_flip()
+
+as_tibble(pca_result$rotation, rownames = "variable") %>%
+  ggplot(aes(variable, PC6)) +
+  geom_point() +
+  coord_flip()
+
+as_tibble(pca_result$rotation, rownames = "variable") %>%
+  ggplot(aes(variable, PC7)) +
+  geom_point() +
+  coord_flip()
+
+as_tibble(pca_result$rotation, rownames = "variable") %>%
+  ggplot(aes(variable, PC8)) +
+  geom_point() +
+  coord_flip()
+```
+After doing so, I include the following eight parameters:
+
+  * urc2013: 2013 Urban-rural classification ranging from 6 (completely urban) to 1 (completely rural)
+  * hs_orless: percentage of people in zcta area where the monitor whose highest formal educational attainment was high school degree or less
+  * lon: longitude of the monitor in degrees
+  * log_nei_2008_pm10_sum_25000: tons of emissions from major sources data base (annual data) sum of all sources within a circle with a radius of 25000m of distance around the monitor (Natural Log)
+  * log_dist_to_prisec: log (Natural Log) distance to primary or secondary road from the monitor -- highway or major road
+  * CMAQ: estimated values of air pollution from a computational model called "Community Multiscale Air Quality (CMAQ)"
+  * popdens_zcta: population density (number of people per kilometer squared area of zcta)
+  * aod: Aerosol Optical Depth measurement from a NASA satellite
+
+These 8 parameters ultimately explain 71.102% of the variability in the data.
+  
+Based on the PCA loadings for the eight parameters, urc2013, hs_orless, lon, log_nei_2008_pm10_sum25000, log_dist_to_prisec, and CMAQ are positively correlated with PM2.5 levels. That is, higher values in these parameters typically have higher PM2.5 levels. Meanwhile, popdens_zcta and aod are negatively correlated with PM2.5 values, so higher readings here will correspond to lower PM2.5 levels.
+
+Given the previous work done using this data in Lab 11, I expect expect the RMSE for all three predictive models to be close to 2. Since there are 876 monitoring stations across the contiguous United States, I wouldn't expect there to be much variation around 2.
+
+## Wrangling
+
+Other than scaling the data for the PCA analysis to determine the number of variables to include in all three models, I did no other wrangling of the data. 
+
+## Results
+
+For all three models, I split 90% of the observations to be in the training set and 10% in the testing set. Additionally, I use 10-fold cross-validation for the three models. Below is the performance of the linear regression model on predicting PM2.5 values. 
+
+```{r}
+## Make this example reproducible by setting a seed
+set.seed(322)
+
+# Split data into train and test sets
+dat_split <- initial_split(dat, prop = 0.9)
+train <- training(dat_split)
+test <- testing(dat_split)
+
+## Create the recipe
+rec <- train %>% 
+    recipe(value ~ urc2013 + hs_orless + lon + log_nei_2008_pm10_sum_25000 + log_dist_to_prisec + CMAQ + popdens_zcta + aod) 
+
+## Create the model
+model <- linear_reg() %>% 
+    set_engine("lm") %>% 
+    set_mode("regression")
+
+## Create the workflow
+wf <- workflow() %>% 
+    add_recipe(rec) %>% 
+    add_model(model)
+
+model_fit <- fit(wf, data = train)
+tidy(model_fit)
+
+## Create 10 folds from the dataset
+folds <- vfold_cv(train, v = 10)
+
+## Run cross validation with the model
+res <- fit_resamples(wf, resamples = folds)
+
+## Show performance metrics
+res %>% 
+    collect_metrics()
+```
+For the training set, the RMSE for the linear regression model is 2.0942131.
+
+```{r}
+# fit linear regression model on test set
+dat_linear <- fit(object = wf, data = dat)
+dat_linear_predictions <- predict(dat_linear, new_data = test)
+
+dat_mod <- data.frame(Predicted = predict(dat_linear, new_data = test), 
+                      Observed = test$value)
+
+# create plot of linear regression model on test set
+dat_mod %>%
+  ggplot(aes(x = .pred, y = Observed)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1) +
+  labs(x = "Predicted", 
+       title = "Predicted vs. Observed Values for Linear Regression Model")
+```
+
+Below is the performance for the KNN model on predicting PM2.5 levels. 
+
+```{r}
+## Make this example reproducible by setting a seed
+set.seed(322)
+
+# Split data into train and test sets
+dat_split <- initial_split(dat, prop = 0.9)
+train <- training(dat_split)
+test <- testing(dat_split)
+
+## Create the recipe
+rec <- train %>% 
+    recipe(value ~ urc2013 + hs_orless + lon + log_nei_2008_pm10_sum_25000 + log_dist_to_prisec + CMAQ + popdens_zcta + aod) 
+
+## Create the model
+model <- nearest_neighbor(neighbors = 10) %>% 
+    set_engine("kknn") %>% 
+    set_mode("regression")
+
+## Create the workflow
+wf <- workflow() %>% 
+    add_recipe(rec) %>% 
+    add_model(model)
+
+## Create 10 folds from the dataset
+folds <- vfold_cv(train, v = 10)
+
+## Run cross validation with the model
+res <- fit_resamples(wf, resamples = folds)
+
+## Show performance metrics
+res %>% 
+    collect_metrics()
+```
+The RMSE for the KNN model is less than that of the linear regression model with a value of 1.8696316. 
+
+```{r}
+# fit kNN model on test set
+dat_kNN <- fit(object = wf, data = dat)
+dat_linear_predictions <- predict(dat_kNN, new_data = test)
+
+dat_mod <- data.frame(Predicted = predict(dat_kNN, new_data = test), 
+                      Observed = test$value)
+
+# create plot of kNN model on test set
+dat_mod %>%
+  ggplot(aes(x = .pred, y = Observed)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1) +
+  labs(x = "Predicted", 
+       title = "Predicted vs. Observed Values for kNN Model")
+```
+
+
+```{r}
+## Make this example reproducible by setting a seed
+set.seed(322)
+
+# Split data into train and test sets
+dat_split <- initial_split(dat, prop = 0.9)
+train <- training(dat_split)
+test <- testing(dat_split)
+
+## Create the recipe
+rec <- train %>% 
+    recipe(value ~ urc2013 + hs_orless + lon + log_nei_2008_pm10_sum_25000 + log_dist_to_prisec + CMAQ + popdens_zcta + aod) 
+
+## Create the model
+model <- boost_tree() %>% 
+    set_engine("xgboost") %>% 
+    set_mode("regression")
+
+## Create the workflow
+wf <- workflow() %>% 
+    add_recipe(rec) %>% 
+    add_model(model)
+
+## Create 10 folds from the dataset
+folds <- vfold_cv(train, v = 10)
+
+## Run cross validation with the model
+res <- fit_resamples(wf, resamples = folds)
+
+## Show performance metrics
+res %>% 
+    collect_metrics()
+```
+
+Finally, the RMSE for the xGBoost model is the lowest of the three with a value of 1.8333918. Considering this, the xGBoost model is the best model at predicting PM2.5 values across the contiguous United States since it has the lowest RMSE of the three models on the training set. Below, I evaluate and visualize its performance on the testing set.
+
+```{r}
+## Make this example reproducible by setting a seed
+set.seed(322)
+
+# Split data into train and test sets
+dat_split <- initial_split(dat, prop = 0.9)
+train <- training(dat_split)
+test <- testing(dat_split)
+
+## Create the recipe
+rec <- test %>% 
+    recipe(value ~ urc2013 + hs_orless + lon + log_nei_2008_pm10_sum_25000 + log_dist_to_prisec + CMAQ + popdens_zcta + aod) 
+
+## Create the model
+model <- boost_tree() %>% 
+    set_engine("xgboost") %>% 
+    set_mode("regression")
+
+## Create the workflow
+wf <- workflow() %>% 
+    add_recipe(rec) %>% 
+    add_model(model)
+
+## Create 10 folds from the dataset
+folds <- vfold_cv(test, v = 10)
+
+## Run cross validation with the model
+res <- fit_resamples(wf, resamples = folds)
+
+## Show performance metrics
+res %>% 
+    collect_metrics()
+```
+
+Interestingly, the xGBoost model performs worse on the test set compared to the training set, though not by too much. It has a RMSE of 2.6318724 on the test set compared to the RMSE of 1.8333918 in the training set.
+
+```{r}
+# fit xGBoost model on test set
+dat_xGBoost <- fit(object = wf, data = dat)
+dat_xGBoost_predictions <- predict(dat_xGBoost, new_data = test)
+
+dat_mod <- data.frame(Predicted = predict(dat_xGBoost, new_data = test), 
+                      Observed = test$value)
+
+# create plot of xGBoost model on test set
+dat_mod %>%
+  ggplot(aes(x = .pred, y = Observed)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1) +
+  labs(x = "Predicted", 
+       title = "Predicted vs. Observed Values for xGBoost Trees Model")
+```
+Below, 
+
+## Discussion
+
+Based on the test set performance, it seems that the xGBoost gives predictions closest to the actual value for... and predictions farthest from the actual value for... . I believe that the reasons for the good and bad performance at these locations are due to... . 
+
+I think that variables such as... might predict whether my model performs well or not. Regions suchg as... perform better compred to ... regions. I think that omitted variables from the model like... may improve the performance of the final model since... 
+
+fdasd
+
+Finally, I think that the model would ultimately perform worse if we were to include locations from Hawaii and Alaska. For the model to perform well and have a low RMSE, the data must be somewhat similar in nature. Since Hawaii and Alaska are so geographically distant from the mainland United States and have much lower levels of urbanization due to this distance, it would introduce outliers in terms of monitoring locations, thus worsening the overall performance of the model. 
+  
+In conducting this project, I found it difficult to determine an exact cutoff for the number of parameters to include in all of the models. At first, I intended to include 12 parameters to explain approximately 80% of the variation in the data, but I referenced this to the performance of the linear regression model to fine tune the number of parameters. From this, I learned how to fine tune the models to avoid overfitting.   
+
+The final prediction model did not work as well as originally expected. This might be because... 
+
+## References
+
+Here are all the references I consulted to write this report.
+
+[Explanation of Linear Regression](https://www.statisticssolutions.com/free-resources/directory-of-statistical-analyses/what-is-linear-regression/)
+
+[Explanation of kNN Regression](https://bookdown.org/tpinto_home/Regression-and-Classification/k-nearest-neighbours-regression.html)
+
+[Explanation of xGBoost Decision Trees](https://docs.aws.amazon.com/sagemaker/latest/dg/xgboost-HowItWorks.html)
