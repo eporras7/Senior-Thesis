@@ -1,0 +1,471 @@
+---
+title: "PROJECT2"
+author: "Lauren and EJ"
+date: "2023-11-14"
+output:
+  html_document:
+    df_print: paged
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(tidymodels)
+library(tidyverse)
+library(factoextra)
+library(cluster)
+tidymodels_prefer()
+library(parsnip)
+library(xgboost)
+```
+
+## Introduction
+
+Given a dataset containing annual average concentrations of fine particulate matter (PM2.5) across the U.S. Environmental Protection Agency's monitoring network in the continental US, there are numerous predictions model that one can implement to predict ambient air pollution concentrations nationwide. For this project, we will be using the following models: linear regression, K-nearest neighbors via KKNN, random forests, and boosted trees via xgboost. 
+
+Linear regression, like its name implies, models a predictive relationship between a scalar response and one or more explanatory variables, which are measured without error. KNN regression is a non-parametric method that approximates the associates between independent variables and the continuous outcome by averaging the observations in the same neighborhood. Third, random forests is a method that builds multiple decision trees using bagging and bootstrapping to subset the data in order to obtain an accurate and stable prediction. Finally, boosted trees via xgboost uses boosting, which combines weak learners (usually decision trees with only one split) sequentially such that each new tree corrects the errors of the previous one. These trees are evaluated using a loss function, and we are trying to minimize the loss function. 
+
+```{r, echo = FALSE}
+#download data
+dat <- read_csv("https://github.com/rdpeng/stat322E_public/raw/main/data/pm25_data.csv.gz")
+```
+To choose the predictor variables to be used throughout all of the models, we used PCA analysis to determine the number of variables to include in the model. Below includes the summary of the PCA analysis to determine the cumulative variation that each loading contributes to the overall variation in the data. 
+
+```{r, echo = FALSE}
+## Remove ID column and categorical variables for PCA 
+dat_pca <- dat %>%
+  select(-id, -county, -state, -city) %>% 
+  scale() 
+
+dat_pca_graph <- dat_pca %>%
+  data.matrix() %>%
+  prcomp()
+
+#observe how many PC's account for 70% of variation
+summary(prcomp(dat_pca))
+
+#clean data to use most contributing variables based on scree plot
+#visualize pca to determine most contributing variables
+as_tibble(dat_pca_graph$rotation,
+rownames = "variable") %>%
+ggplot(aes(variable, PC1)) +
+geom_point() +
+coord_flip()
+
+as_tibble(dat_pca_graph$rotation,
+rownames = "variable") %>%
+ggplot(aes(variable, PC2)) +
+geom_point() +
+coord_flip()
+
+as_tibble(dat_pca_graph$rotation,
+rownames = "variable") %>%
+ggplot(aes(variable, PC3)) +
+geom_point() +
+coord_flip()
+
+as_tibble(dat_pca_graph$rotation,
+rownames = "variable") %>%
+ggplot(aes(variable, PC4)) +
+geom_point() +
+coord_flip()
+
+as_tibble(dat_pca_graph$rotation,
+rownames = "variable") %>%
+ggplot(aes(variable, PC5)) +
+geom_point() +
+coord_flip()
+
+as_tibble(dat_pca_graph$rotation,
+rownames = "variable") %>%
+ggplot(aes(variable, PC6)) +
+geom_point() +
+coord_flip()
+
+as_tibble(dat_pca_graph$rotation, rownames = "variable") %>%
+ggplot(aes(variable, PC7)) +
+geom_point() +
+coord_flip()
+
+as_tibble(dat_pca_graph$rotation, rownames = "variable") %>%
+ggplot(aes(variable, PC8)) +
+geom_point() +
+coord_flip()
+
+# use 8 variables based off of pca plot 
+dat_clean <- dat %>%
+  select(urc2013, hs_orless, lon, log_nei_2008_pm25_sum_25000, log_dist_to_prisec, CMAQ, aod, popdens_zcta, value)
+
+# sort into train and test data
+set.seed(365)
+dat_split <- initial_split(dat_clean, strata = value)
+dat_train <- training(dat_split)
+dat_test  <- testing(dat_split)
+
+# split training data for cross validation 
+set.seed(365)
+train_dat_folds <- vfold_cv(dat_train)
+
+```
+
+After doing so, we include the following eight parameters:
+
+  * urc2013: 2013 Urban-rural classification ranging from 6 (completely urban) to 1 (completely rural)
+  * hs_orless: percentage of people in zcta area where the monitor whose highest formal educational attainment was high school degree or less
+  * lon: longitude of the monitor in degrees
+  * log_nei_2008_pm25_sum_25000: tons of emissions from major sources data base (annual data) sum of all sources within a circle with a radius of 25000m of distance around the monitor (Natural Log)
+  * log_dist_to_prisec: log (Natural Log) distance to primary or secondary road from the monitor -- highway or major road
+  * CMAQ: estimated values of air pollution from a computational model called "Community Multiscale Air Quality (CMAQ)"
+  * popdens_zcta: population density (number of people per kilometer squared area of zcta)
+  * aod: Aerosol Optical Depth measurement from a NASA satellite
+
+These 8 parameters ultimately explain 71.102% of the variability in the data. Based on the PCA loadings for the eight parameters, urc2013, hs_orless, lon, log_nei_2008_pm25_sum25000, log_dist_to_prisec, and CMAQ are positively correlated with PM2.5 levels. That is, higher values in these parameters typically have higher PM2.5 levels. Meanwhile, popdens_zcta and aod are negatively correlated with PM2.5 values, so higher readings here will correspond to lower PM2.5 levels.
+
+Given the previous work done using this data in Lab 11, we expect the RMSE for all three predictive models to be close to 2. Since there are 876 monitoring stations across the contiguous United States, we wouldn't expect there to be much variation around 2.
+
+## Wrangling
+
+Other than scaling the data for the PCA analysis to determine the number of variables to include in all three models, we did no other wrangling of the data. 
+
+## Results
+
+### First Model: Linear Regression
+``` {r}
+#create linear model, workflow, and formula
+#tuning recipe attempt to two lowest contributing to variation
+#with tuning RMSE = 2, without is 2.1
+lm_rec <- dat_train %>%
+  recipe(value ~.) %>%
+  step_normalize() %>%
+  step_ns(log_nei_2008_pm25_sum_25000, deg_free = tune("df_log")) %>%
+  step_ns(CMAQ, deg_free = tune("df_CMAQ"))
+
+#create model
+lm_model <- 
+  linear_reg() %>% 
+  set_engine("lm")%>%
+  set_mode("regression")
+
+lm_wflow <- 
+  workflow() %>% 
+  add_recipe(lm_rec) %>%
+  add_model(lm_model)
+
+#tuning tables determined that df of 2 and 8 are lowest RMSE
+res <- tune_grid(lm_wflow, resamples = train_dat_folds,
+  grid = expand.grid(df_log= c(2, 4, 6, 8), df_CMAQ = c(2,4,6,8)),
+  control = control_grid(save_pred = TRUE))
+
+#visualize lowest RMSE of tuning data 
+res %>%
+collect_metrics() %>%
+filter(.metric == "rmse") %>%
+arrange(mean)
+
+
+#final recipe based on lowest RMSE df
+lm_rec <- dat_train %>%
+  recipe(value ~.) %>%
+  step_normalize() %>%
+  step_ns(log_nei_2008_pm25_sum_25000, deg_free = 4) %>%
+  step_ns(CMAQ, deg_free = 8)
+
+lm_model <- 
+  linear_reg() %>% 
+  set_engine("lm")%>%
+  set_mode("regression")
+
+lm_wflow <- 
+  workflow() %>% 
+  add_recipe(lm_rec) %>%
+  add_model(lm_model)
+
+lm_cv_fit <- fit_resamples(lm_wflow, resamples= train_dat_folds)
+
+lm_cv_fit %>%
+  collect_metrics()
+
+#fit model
+lm_final_fit <- fit(lm_wflow, dat_train)
+
+#predicted and real values of test data 
+lin_dat_test <- dat_train
+dat_test_res <- predict(lm_final_fit, new_data = dat_train %>% select(-value))
+dat_test_res <- bind_cols(dat_test_res, lin_dat_test %>% select(value))
+
+#calculate RMSE and metrics of model
+# dat_metrics <- metric_set(rmse, rsq, mae)
+# dat_metrics(dat_test_res, truth = value, estimate = .pred)
+
+#plot data
+ggplot(dat_test_res, aes(x = value, y = .pred)) + 
+  # Create a diagonal line:
+  geom_abline(lty = 2) + 
+  geom_point(alpha = 0.5) + 
+  labs(y = "Predicted Value", x = "Observed Value") +
+  # Scale and size the x- and y-axis uniformly:
+  coord_obs_pred()
+
+```
+
+### Second Model: k-Nearest Neighbors Regression
+```{r} 
+#create knn model
+library(dplyr)
+knn_rec <- dat_train %>%
+  recipe(value ~.) %>%
+  step_normalize()
+
+#tuning
+library(caret)
+knnModel <- train(
+		     value ~ ., 
+		     data = dat_train, 
+	            method = "knn", 
+		     trControl = trainControl(method = "cv"), 
+		     tuneGrid = data.frame(k = c(3,5,7,10,15)))
+
+#view best number of knn
+knnModel
+
+#final knn model
+knn_model <- nearest_neighbor(neighbors = 10) %>% 
+    set_engine("kknn") %>% 
+    set_mode("regression")
+
+knn_wf <- 
+    workflow() %>% 
+    add_recipe(knn_rec) %>% 
+    add_model(knn_model)
+
+#use cross validation #DOES NOT WORK
+# knn_model_fit <- fit_resamples(knn_model, resamples = train_dat_folds)
+
+# knn_model_fit %>% 
+#  collect_metrics()
+
+#final fit
+knn_final_fit <- fit(knn_wf, data=dat_train)
+
+## Plot model fit with the data
+knn_dat <- dat_train
+knn_dat_test_res <- predict(knn_final_fit, new_data = dat_train %>% select(-value))
+knn_dat_test_res <- bind_cols(knn_dat_test_res, knn_dat %>% select(value))
+
+#summary statistic of model
+rmse(knn_dat_test_res, truth = value, estimate = .pred)
+
+#model plot 
+ggplot(knn_dat_test_res, aes(x = value, y = .pred)) + 
+  # Create a diagonal line:
+  geom_abline(lty = 2) + 
+  geom_point(alpha = 0.5) + 
+  labs(y = "Predicted Value", x = "Observed Value") +
+  # Scale and size the x- and y-axis uniformly:
+  coord_obs_pred()
+
+
+```
+
+
+### Third Model: Random Forests
+```{r}
+library(dplyr)
+#recipe
+rf_rec <- dat_train %>%
+  recipe(value ~.) %>%
+  step_normalize() 
+
+#create tuning model
+tune_spec <- rand_forest(
+  mtry = tune(),
+  trees = 20,
+  min_n = tune()) %>%
+  set_mode("regression") %>%
+  set_engine("ranger")
+
+tune_wf <- workflow() %>%
+  add_recipe(rf_rec) %>%
+  add_model(tune_spec)
+
+#tuning parameters
+doParallel::registerDoParallel()
+
+rf_grid <- grid_regular(
+  mtry(range = c(1, 8)),
+  min_n(range = c(2, 8)),
+  levels = 5)
+
+regular_res <- tune_grid(
+  tune_wf,
+  resamples = train_dat_folds,
+  grid = rf_grid)
+
+#determine best parameters
+best_rmse <- select_best(regular_res, "rmse")
+
+final_rf <- finalize_model(
+  tune_spec,
+  best_rmse)
+
+final_rf
+
+#real RF model
+rf_model <- rand_forest(
+  mtry = integer(4),
+  trees = 20,
+  min_n = 2) %>% 
+  set_engine("ranger") %>% 
+  set_mode("regression")
+
+rf_wf <- workflow() %>% 
+    add_recipe(rf_rec) %>% 
+    add_model(rf_model)
+
+#fit
+library(vip)
+
+final_rf %>%
+  set_engine("ranger", importance = "permutation") %>%
+  fit(value ~ .,
+    data = dat_train 
+  ) %>%
+  vip(geom = "point")
+
+final_wf <- workflow() %>%
+  add_recipe(rf_rec) %>%
+  add_model(final_rf)
+
+final_res <- final_wf %>%
+  last_fit(dat_split)
+
+# final_res<-fit_resamples(final_rf, resamples = train_dat_folds)
+
+final_res %>%
+  collect_metrics()
+
+#MISSING CROSS VALIDATION
+```
+
+
+### Fourth Model: xGBoost Decision Trees
+
+```{r}
+## Make this example reproducible by setting a seed
+set.seed(322)
+
+# Split data into train and test sets
+dat_split <- initial_split(dat, prop = 0.9)
+train <- training(dat_split)
+test <- testing(dat_split)
+
+## Create the recipe
+rec <- dat_train %>% 
+    recipe(value ~ urc2013 + hs_orless + lon + log_nei_2008_pm25_sum_25000 + log_dist_to_prisec + CMAQ + popdens_zcta + aod) 
+
+## Create the model
+model <- boost_tree() %>% 
+    set_engine("xgboost") %>% 
+    set_mode("regression")
+
+## Create the workflow
+wf <- workflow() %>% 
+    add_recipe(rec) %>% 
+    add_model(model)
+
+## Create 10 folds from the dataset
+folds <- vfold_cv(dat_train, v = 10)
+
+## Run cross validation with the model
+res <- fit_resamples(wf, resamples = folds)
+
+## Show performance metrics
+res %>% 
+    collect_metrics()
+```
+
+Finally, the RMSE for the xGBoost model is 1.8333918. Considering the performance of all four models, the kNN model is the best model at predicting PM2.5 values across the contiguous United States since it has the lowest RMSE of the four models on the training set. In the next section, we evaluate and visualize its performance on the testing set.
+
+### Testing and Discussion Questions Using kNN Model
+
+```{r}
+# get kNN performance metrics on test set
+knn_dat_final <- dat_test
+knn_dat_test <- predict(knn_final_fit, new_data = dat_test %>% select(-value))
+final_test <- bind_cols(knn_dat_test, dat_test)
+rmse(final_test, truth = value, estimate = .pred)
+
+#join data sets
+final_test2 <- left_join(final_test, dat, by=join_by(value==value))
+
+#Q1: farthest differentials because largest county, close differentials because metro city in county
+final_test2 %>%
+  mutate(resid = abs(.pred - value)) %>%
+  arrange(desc(resid)) %>%
+  select(resid, state, county) 
+  
+
+#Q2: area and population factor into high vs low residuals
+final_test2 %>%
+  mutate(resid = abs(.pred - value)) %>%
+  arrange(desc(resid)) %>%
+  slice_max(resid, n=3)
+
+final_test2 %>%
+  mutate(resid = abs(.pred - value)) %>%
+  arrange(desc(resid)) %>%
+  slice_min(resid, n=3)
+
+#Q3: remove CMAQ and AOD
+q3 <- dat_train %>%
+  select(-CMAQ, -aod)
+
+knn_rec_q3 <- q3 %>%
+  recipe(value ~.) %>%
+  step_normalize()
+
+#final knn model
+knn_model <- nearest_neighbor(neighbors = 10) %>% 
+    set_engine("kknn") %>% 
+    set_mode("regression")
+
+knn_wf_q3 <- 
+    workflow() %>% 
+    add_recipe(knn_rec_q3) %>% 
+    add_model(knn_model)
+
+knn_final_fit <- fit(knn_wf_q3, data=q3)
+
+knn_dat_q3 <- q3
+q3_dat <- predict(knn_final_fit, new_data = q3 %>% select(-value))
+q3_dat <- bind_cols(q3_dat, knn_dat_q3 %>% select(value))
+
+#RMSE without aod and CMAQ is 1.69, with aod and CMAQ is 1.422
+rmse(q3_dat, truth = value, estimate = .pred)
+
+
+
+```
+
+Based on the test set performance, it seems that the kNN model gives predictions closest to the actual value in counties in the eastern United States like Suffolk County in Massachusetts and Philadelphia County in Pennsylvania. On the other hand, the predictions farthest from the actual value are counties on the west coast, typically in California and Oregon. We believe that the reasons for the good and bad performance at these locations are due to how the monito. Since our model includes parameters that make heavy distinctions between rural and urban areas (i.e. urc2013, popdens_zcta, log_nei_2008_pm25_sum_25000, etc.), the model should perform well in small counties that are known for containing a metropolitan city. For example, Suffolk County contains Boston, MA and is small in area, so particulate matter predictions should be pretty accurate there. The model performs poorly, however, in large expansive counties (typically rural) that do not have urban aspects, but may have other types of infrastructure in place that may contribute very heavily to PM2.5 levels, such as power plants that depend on industry. 
+
+Going off of this hypothesis, we believe that variables that account for the differences in sheer size and population densities between counties such as county_area, county_pop, and zcta_pop might predict whether my model performs well or not. Generally speaking, smaller regions that are more densely populated due to the presence of a big city perform better compred to very large regions that are very rural or large areas that have tightly packed into a central hub and very little activity everywhere else. If we were to include the omitted variables from above into the model, the model may be able to explain the interactions between rural-urban migration, industry, and particulate matter a little more effectively. 
+
+If we took out numerical models like CMAQ and satellite-based observations like aod from the model, the prediction performance of the model gets worse. Beforehand, the RMSE of the kNN model with CMAQ and aod included is 1.4429987. After excluding these parameters from the recipe, the new RMSE is 1.694523. We suspect that this is because that these metrics can run through lots of simulations (in the case of CMAQ) or observe satellite locations worldwide (aod) to improve the precision of the predictions and become less vulnerable to other variables that may explain particulate matter levels.
+
+Finally, we think that the model would ultimately perform well for Hawaii, but bad in Alaska. There are only 5 counties and 8 islands in Hawaii, so it's reasonable to assume that there's a city on each island. This matches the characteristics of Suffolk County and Pennsylvania County (small counties that contain cities, with Hawaii fitting due to geographical constraints). This aligns with reasonable performance in the kNN model. On the other hand, Alaska, since it is so big, seems more like Shasta and San Bernadino Counties in California, where predictions may be off due to the large area in the county and the low population densities in each of those counties.
+  
+In conducting this project, we found it difficult to determine an exact cutoff for the number of parameters to include in all of the models. At first, we intended to include 15 parameters to explain approximately 85% of the variation in the data, but we referenced this to the performance of the linear regression model to fine tune the number of parameters. From this, we kept the same parameters to be included in the other models since they seemed to account for a lot of the potential determinants of particulate matter levels nationwide. Still, getting that intuition for both choosing the number of parameters and the optimal models to get reasonable results proved to be a difficult endeavor. 
+
+While the final prediction model did not work as well as originally expected, the RMSE on the testing set is still very respectable at 1.807677 (considering the fact that any RMSE under 2 is a good model). The disparity in performance compared to the training set might be because of the split, where we stratify by PM2.5 values.  
+
+EJ wrote the introduction, created the xGBoost model, and wrote the conclusion. Lauren created and tuned the linear regression, kNN, and random forests model, and wrote the results section.
+
+## References
+
+Here are all the references we consulted to write this report.
+
+[Explanation of Linear Regression](https://www.statisticssolutions.com/free-resources/directory-of-statistical-analyses/what-is-linear-regression/)
+
+[Explanation of kNN Regression](https://bookdown.org/tpinto_home/Regression-and-Classification/k-nearest-neighbours-regression.html)
+
+[Explanation of xGBoost Decision Trees](https://docs.aws.amazon.com/sagemaker/latest/dg/xgboost-HowItWorks.html)
